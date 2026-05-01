@@ -1,0 +1,44 @@
+{
+  "sessions": [
+    {
+      "sessionId": "sess-gz14de",
+      "workTitle": "哈利波特与凤凰社",
+      "endingDirection": "小天狼星在神秘事务司被救下，最终和哈利拥抱和解。",
+      "stylePreference": "warmHealing",
+      "createdAt": 1777296187609,
+      "sourceVideoPath": ""
+    },
+    {
+      "sessionId": "sess-ascqx3",
+      "workTitle": "哈利波特",
+      "endingDirection": "救下小天狼星",
+      "stylePreference": "warmHealing",
+      "createdAt": 1777296430907,
+      "sourceVideoPath": ""
+    },
+    {
+      "sessionId": "sess-o7gyne",
+      "workTitle": "哈利波特",
+      "endingDirection": "救下小天狼星",
+      "stylePreference": "warmHealing",
+      "createdAt": 1777296559496,
+      "sourceVideoPath": ""
+    },
+    {
+      "sessionId": "sess-2yvpqm",
+      "workTitle": "哈利波特与凤凰社",
+      "endingDirection": "小天狼星在神秘事务司被救下，最终和哈利拥抱和解。",
+      "stylePreference": "warmHealing",
+      "createdAt": 1777296707311,
+      "sourceVideoPath": ""
+    },
+    {
+      "sessionId": "sess-r1gd5n",
+      "workTitle": "哈利波特与凤凰社",
+      "endingDirection": "小天狼星在神秘事务司被救下，最终和哈利拥抱和解。",
+      "stylePreference": "warmHealing",
+      "createdAt": 1777296832857,
+      "sourceVideoPath": ""
+    }
+  ]
+}

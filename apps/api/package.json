@@ -1,0 +1,21 @@
+{
+  "name": "@yinanping/api",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "node src/server.js",
+    "start": "node src/server.js",
+    "lint": "node --check src/server.js && node --check src/gateway.js && node --check src/discussionEngine.js && node --check src/distilledDiscussionEngine.js && node --check src/videoPipeline.js && node --check src/sessionStore.js && node --check src/agentCatalog.js && node --check scripts/runDistillEval.js && node --check scripts/smokeVideoPipeline.js && node --check scripts/smokeGatewayChaos.js && node --check test/sessionStore.test.js",
+    "test": "node --test",
+    "distill:eval": "node scripts/runDistillEval.js",
+    "smoke:video": "node scripts/smokeVideoPipeline.js",
+    "smoke:gateway": "node scripts/smokeGatewayChaos.js"
+  },
+  "dependencies": {
+    "@yinanping/agent-profiles": "0.1.0",
+    "@yinanping/contracts": "0.1.0",
+    "cors": "^2.8.5",
+    "express": "^4.21.2"
+  }
+}

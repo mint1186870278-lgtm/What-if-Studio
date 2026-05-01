@@ -1,0 +1,620 @@
+{
+  "generatedAt": "2026-04-27T12:55:55.292Z",
+  "summary": {
+    "datasetSize": 16,
+    "templateAverage": 83,
+    "distilledAverage": 83,
+    "onlineAverage": 83,
+    "improvedSamples": 15
+  },
+  "results": [
+    {
+      "id": "hp-rescue",
+      "session": {
+        "workTitle": "哈利波特与凤凰社",
+        "endingDirection": "小天狼星被救下并与哈利和解",
+        "stylePreference": "warmHealing"
+      },
+      "template": {
+        "total": 87,
+        "metrics": {
+          "agendaScore": 100,
+          "executionScore": 100,
+          "referenceScore": 33,
+          "endingScore": 100,
+          "brevityScore": 100
+        }
+      },
+      "distilled": {
+        "total": 93,
+        "metrics": {
+          "agendaScore": 100,
+          "executionScore": 100,
+          "referenceScore": 67,
+          "endingScore": 100,
+          "brevityScore": 100
+        }
+      },
+      "online": {
+        "total": 87,
+        "metrics": {
+          "agendaScore": 100,
+          "executionScore": 100,
+          "referenceScore": 33,
+          "endingScore": 100,
+          "brevityScore": 100
+        }
+      }
+    },
+    {
+      "id": "hp-warline",
+      "session": {
+        "workTitle": "哈利波特与死亡圣器",
+        "endingDirection": "大战后保留牺牲但主角群完成和解",
+        "stylePreference": "darkEpic"
+      },
+      "template": {
+        "total": 80,
+        "metrics": {
+          "agendaScore": 100,
+          "executionScore": 100,
+          "referenceScore": 0,
+          "endingScore": 100,
+          "brevityScore": 100
+        }
+      },
+      "distilled": {
+        "total": 80,
+        "metrics": {
+          "agendaScore": 100,
+          "executionScore": 100,
+          "referenceScore": 0,
+          "endingScore": 100,
+          "brevityScore": 100
+        }
+      },
+      "online": {
+        "total": 80,
+        "metrics": {
+          "agendaScore": 100,
+          "executionScore": 100,
+          "referenceScore": 0,
+          "endingScore": 100,
+          "brevityScore": 100
+        }
+      }
+    },
+    {
+      "id": "marvel-he",
+      "session": {
+        "workTitle": "复仇者联盟",
+        "endingDirection": "钢铁侠幸存但承担公开责任",
+        "stylePreference": "fantasyGrand"
+      },
+      "template": {
+        "total": 80,
+        "metrics": {
+          "agendaScore": 100,
+          "executionScore": 100,
+          "referenceScore": 0,
+          "endingScore": 100,
+          "brevityScore": 100
+        }
+      },
+      "distilled": {
+        "total": 87,
+        "metrics": {
+          "agendaScore": 100,
+          "executionScore": 100,
+          "referenceScore": 33,
+          "endingScore": 100,
+          "brevityScore": 100
+        }
+      },
+      "online": {
+        "total": 80,
+        "metrics": {
+          "agendaScore": 100,
+          "executionScore": 100,
+          "referenceScore": 0,
+          "endingScore": 100,
+          "brevityScore": 100
+        }
+      }
+    },
+    {
+      "id": "qing-drama",
+      "session": {
+        "workTitle": "甄嬛传",
+        "endingDirection": "关键角色达成和解但权力代价保留",
+        "stylePreference": "realism"
+      },
+      "template": {
+        "total": 80,
+        "metrics": {
+          "agendaScore": 100,
+          "executionScore": 100,
+          "referenceScore": 0,
+          "endingScore": 100,
+          "brevityScore": 100
+        }
+      },
+      "distilled": {
+        "total": 80,
+        "metrics": {
+          "agendaScore": 100,
+          "executionScore": 100,
+          "referenceScore": 0,
+          "endingScore": 100,
+          "brevityScore": 100
+        }
+      },
+      "online": {
+        "total": 80,
+        "metrics": {
+          "agendaScore": 100,
+          "executionScore": 100,
+          "referenceScore": 0,
+          "endingScore": 100,
+          "brevityScore": 100
+        }
+      }
+    },
+    {
+      "id": "lotr-return",
+      "session": {
+        "workTitle": "指环王",
+        "endingDirection": "战后主角团重聚并完成告别",
+        "stylePreference": "fantasyGrand"
+      },
+      "template": {
+        "total": 80,
+        "metrics": {
+          "agendaScore": 100,
+          "executionScore": 100,
+          "referenceScore": 0,
+          "endingScore": 100,
+          "brevityScore": 100
+        }
+      },
+      "distilled": {
+        "total": 80,
+        "metrics": {
+          "agendaScore": 100,
+          "executionScore": 100,
+          "referenceScore": 0,
+          "endingScore": 100,
+          "brevityScore": 100
+        }
+      },
+      "online": {
+        "total": 80,
+        "metrics": {
+          "agendaScore": 100,
+          "executionScore": 100,
+          "referenceScore": 0,
+          "endingScore": 100,
+          "brevityScore": 100
+        }
+      }
+    },
+    {
+      "id": "spiderman-growth",
+      "session": {
+        "workTitle": "蜘蛛侠",
+        "endingDirection": "身份公开后通过牺牲修复关系",
+        "stylePreference": "darkEpic"
+      },
+      "template": {
+        "total": 87,
+        "metrics": {
+          "agendaScore": 100,
+          "executionScore": 100,
+          "referenceScore": 33,
+          "endingScore": 100,
+          "brevityScore": 100
+        }
+      },
+      "distilled": {
+        "total": 80,
+        "metrics": {
+          "agendaScore": 100,
+          "executionScore": 100,
+          "referenceScore": 0,
+          "endingScore": 100,
+          "brevityScore": 100
+        }
+      },
+      "online": {
+        "total": 87,
+        "metrics": {
+          "agendaScore": 100,
+          "executionScore": 100,
+          "referenceScore": 33,
+          "endingScore": 100,
+          "brevityScore": 100
+        }
+      }
+    },
+    {
+      "id": "wandering-earth",
+      "session": {
+        "workTitle": "流浪地球",
+        "endingDirection": "任务成功但保留亲情创伤",
+        "stylePreference": "darkEpic"
+      },
+      "template": {
+        "total": 80,
+        "metrics": {
+          "agendaScore": 100,
+          "executionScore": 100,
+          "referenceScore": 0,
+          "endingScore": 100,
+          "brevityScore": 100
+        }
+      },
+      "distilled": {
+        "total": 80,
+        "metrics": {
+          "agendaScore": 100,
+          "executionScore": 100,
+          "referenceScore": 0,
+          "endingScore": 100,
+          "brevityScore": 100
+        }
+      },
+      "online": {
+        "total": 80,
+        "metrics": {
+          "agendaScore": 100,
+          "executionScore": 100,
+          "referenceScore": 0,
+          "endingScore": 100,
+          "brevityScore": 100
+        }
+      }
+    },
+    {
+      "id": "interstellar",
+      "session": {
+        "workTitle": "星际穿越",
+        "endingDirection": "父女重聚但时间代价被强调",
+        "stylePreference": "realism"
+      },
+      "template": {
+        "total": 87,
+        "metrics": {
+          "agendaScore": 100,
+          "executionScore": 100,
+          "referenceScore": 33,
+          "endingScore": 100,
+          "brevityScore": 100
+        }
+      },
+      "distilled": {
+        "total": 87,
+        "metrics": {
+          "agendaScore": 100,
+          "executionScore": 100,
+          "referenceScore": 33,
+          "endingScore": 100,
+          "brevityScore": 100
+        }
+      },
+      "online": {
+        "total": 87,
+        "metrics": {
+          "agendaScore": 100,
+          "executionScore": 100,
+          "referenceScore": 33,
+          "endingScore": 100,
+          "brevityScore": 100
+        }
+      }
+    },
+    {
+      "id": "matrix-redemption",
+      "session": {
+        "workTitle": "黑客帝国",
+        "endingDirection": "主角存活并达成有限和平",
+        "stylePreference": "darkEpic"
+      },
+      "template": {
+        "total": 80,
+        "metrics": {
+          "agendaScore": 100,
+          "executionScore": 100,
+          "referenceScore": 0,
+          "endingScore": 100,
+          "brevityScore": 100
+        }
+      },
+      "distilled": {
+        "total": 80,
+        "metrics": {
+          "agendaScore": 100,
+          "executionScore": 100,
+          "referenceScore": 0,
+          "endingScore": 100,
+          "brevityScore": 100
+        }
+      },
+      "online": {
+        "total": 80,
+        "metrics": {
+          "agendaScore": 100,
+          "executionScore": 100,
+          "referenceScore": 0,
+          "endingScore": 100,
+          "brevityScore": 100
+        }
+      }
+    },
+    {
+      "id": "frozen-heal",
+      "session": {
+        "workTitle": "冰雪奇缘",
+        "endingDirection": "姐妹关系修复并保留成长创伤",
+        "stylePreference": "warmHealing"
+      },
+      "template": {
+        "total": 80,
+        "metrics": {
+          "agendaScore": 100,
+          "executionScore": 100,
+          "referenceScore": 0,
+          "endingScore": 100,
+          "brevityScore": 100
+        }
+      },
+      "distilled": {
+        "total": 80,
+        "metrics": {
+          "agendaScore": 100,
+          "executionScore": 100,
+          "referenceScore": 0,
+          "endingScore": 100,
+          "brevityScore": 100
+        }
+      },
+      "online": {
+        "total": 80,
+        "metrics": {
+          "agendaScore": 100,
+          "executionScore": 100,
+          "referenceScore": 0,
+          "endingScore": 100,
+          "brevityScore": 100
+        }
+      }
+    },
+    {
+      "id": "ultraman-legacy",
+      "session": {
+        "workTitle": "奥特曼",
+        "endingDirection": "守护城市成功并完成代际传承",
+        "stylePreference": "auto"
+      },
+      "template": {
+        "total": 87,
+        "metrics": {
+          "agendaScore": 100,
+          "executionScore": 100,
+          "referenceScore": 33,
+          "endingScore": 100,
+          "brevityScore": 100
+        }
+      },
+      "distilled": {
+        "total": 87,
+        "metrics": {
+          "agendaScore": 100,
+          "executionScore": 100,
+          "referenceScore": 33,
+          "endingScore": 100,
+          "brevityScore": 100
+        }
+      },
+      "online": {
+        "total": 87,
+        "metrics": {
+          "agendaScore": 100,
+          "executionScore": 100,
+          "referenceScore": 33,
+          "endingScore": 100,
+          "brevityScore": 100
+        }
+      }
+    },
+    {
+      "id": "onepiece-battle",
+      "session": {
+        "workTitle": "海贼王",
+        "endingDirection": "大战后伙伴重聚并承担新航线风险",
+        "stylePreference": "fantasyGrand"
+      },
+      "template": {
+        "total": 80,
+        "metrics": {
+          "agendaScore": 100,
+          "executionScore": 100,
+          "referenceScore": 0,
+          "endingScore": 100,
+          "brevityScore": 100
+        }
+      },
+      "distilled": {
+        "total": 80,
+        "metrics": {
+          "agendaScore": 100,
+          "executionScore": 100,
+          "referenceScore": 0,
+          "endingScore": 100,
+          "brevityScore": 100
+        }
+      },
+      "online": {
+        "total": 80,
+        "metrics": {
+          "agendaScore": 100,
+          "executionScore": 100,
+          "referenceScore": 0,
+          "endingScore": 100,
+          "brevityScore": 100
+        }
+      }
+    },
+    {
+      "id": "naruto-repair",
+      "session": {
+        "workTitle": "火影忍者",
+        "endingDirection": "宿敌和解但战争伤痕保留",
+        "stylePreference": "warmHealing"
+      },
+      "template": {
+        "total": 80,
+        "metrics": {
+          "agendaScore": 100,
+          "executionScore": 100,
+          "referenceScore": 0,
+          "endingScore": 100,
+          "brevityScore": 100
+        }
+      },
+      "distilled": {
+        "total": 80,
+        "metrics": {
+          "agendaScore": 100,
+          "executionScore": 100,
+          "referenceScore": 0,
+          "endingScore": 100,
+          "brevityScore": 100
+        }
+      },
+      "online": {
+        "total": 80,
+        "metrics": {
+          "agendaScore": 100,
+          "executionScore": 100,
+          "referenceScore": 0,
+          "endingScore": 100,
+          "brevityScore": 100
+        }
+      }
+    },
+    {
+      "id": "threebody",
+      "session": {
+        "workTitle": "三体",
+        "endingDirection": "危机暂缓但文明代价被正面呈现",
+        "stylePreference": "realism"
+      },
+      "template": {
+        "total": 87,
+        "metrics": {
+          "agendaScore": 100,
+          "executionScore": 100,
+          "referenceScore": 33,
+          "endingScore": 100,
+          "brevityScore": 100
+        }
+      },
+      "distilled": {
+        "total": 87,
+        "metrics": {
+          "agendaScore": 100,
+          "executionScore": 100,
+          "referenceScore": 33,
+          "endingScore": 100,
+          "brevityScore": 100
+        }
+      },
+      "online": {
+        "total": 87,
+        "metrics": {
+          "agendaScore": 100,
+          "executionScore": 100,
+          "referenceScore": 33,
+          "endingScore": 100,
+          "brevityScore": 100
+        }
+      }
+    },
+    {
+      "id": "detective-conan",
+      "session": {
+        "workTitle": "名侦探柯南",
+        "endingDirection": "真相揭晓并保留角色长期秘密",
+        "stylePreference": "auto"
+      },
+      "template": {
+        "total": 80,
+        "metrics": {
+          "agendaScore": 100,
+          "executionScore": 100,
+          "referenceScore": 0,
+          "endingScore": 100,
+          "brevityScore": 100
+        }
+      },
+      "distilled": {
+        "total": 80,
+        "metrics": {
+          "agendaScore": 100,
+          "executionScore": 100,
+          "referenceScore": 0,
+          "endingScore": 100,
+          "brevityScore": 100
+        }
+      },
+      "online": {
+        "total": 80,
+        "metrics": {
+          "agendaScore": 100,
+          "executionScore": 100,
+          "referenceScore": 0,
+          "endingScore": 100,
+          "brevityScore": 100
+        }
+      }
+    },
+    {
+      "id": "avatar-balance",
+      "session": {
+        "workTitle": "阿凡达",
+        "endingDirection": "冲突结束但生态代价仍在",
+        "stylePreference": "fantasyGrand"
+      },
+      "template": {
+        "total": 87,
+        "metrics": {
+          "agendaScore": 100,
+          "executionScore": 100,
+          "referenceScore": 33,
+          "endingScore": 100,
+          "brevityScore": 100
+        }
+      },
+      "distilled": {
+        "total": 87,
+        "metrics": {
+          "agendaScore": 100,
+          "executionScore": 100,
+          "referenceScore": 33,
+          "endingScore": 100,
+          "brevityScore": 100
+        }
+      },
+      "online": {
+        "total": 87,
+        "metrics": {
+          "agendaScore": 100,
+          "executionScore": 100,
+          "referenceScore": 33,
+          "endingScore": 100,
+          "brevityScore": 100
+        }
+      }
+    }
+  ]
+}
