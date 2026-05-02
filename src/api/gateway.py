@@ -25,7 +25,7 @@ async def list_services():
     ANet registry or service discovery."""
     # Backend-local AutoGen services.
     services = [
-        {"name": "whatif-studio", "capability": "multi_agent_director_debate_and_video_editing_pipeline"},
+        {"name": "yinanping-studio", "capability": "multi_agent_director_debate_and_video_editing_pipeline"},
     ]
     return {"services": services}
 

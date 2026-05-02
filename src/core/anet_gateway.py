@@ -84,7 +84,7 @@ def get_svc_client() -> Any:
 
 ANET_SERVICE_DEFINITIONS: list[dict[str, Any]] = [
     {
-        "name": "whatif-studio",
+        "name": "yinanping-studio",
         "endpoint": "http://127.0.0.1:8000",
         "paths": [
             "/api/sessions/{id}/stream",
