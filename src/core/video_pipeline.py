@@ -26,11 +26,12 @@ _MAX_POLL_ATTEMPTS = 120
 
 
 def _siliconflow_key() -> str | None:
-    return os.environ.get("SILICONFLOW_API_KEY") or os.environ.get("OPENAI_API_KEY")
+    key = settings.siliconflow_api_key
+    return key if key else None
 
 
 def _siliconflow_base() -> str:
-    return os.environ.get("SILICONFLOW_BASE_URL", "https://api.siliconflow.cn/v1").rstrip("/") + "/v1"
+    return os.environ.get("SILICONFLOW_BASE_URL", "https://api.siliconflow.cn/v1").rstrip("/")
 
 
 async def _submit_wan_task(prompt: str, **extra: dict) -> str:
@@ -53,41 +54,87 @@ async def _submit_wan_task(prompt: str, **extra: dict) -> str:
         )
         resp.raise_for_status()
         data = resp.json()
-    task_id = data.get("request_id") or data.get("task_id") or data.get("id")
+    # SiliconFlow returns camelCase ("requestId") not snake_case ("request_id")
+    task_id = (
+        data.get("requestId")
+        or data.get("request_id")
+        or data.get("taskId")
+        or data.get("task_id")
+        or data.get("id")
+    )
     if not task_id:
         raise RuntimeError(f"SiliconFlow submit returned no task_id: {data}")
     return str(task_id)
 
 
 async def _poll_wan_task(request_id: str) -> str:
-    """Poll until the task completes and return the video URL."""
+    """Poll until the task completes and return the video URL.
+
+    Uses SiliconFlow's correct API endpoints:
+      1. POST /v1/video/status  body={"requestId": "..."}
+      2. GET  /v1/video/query   ?id=...
+    """
     headers = {
         "Authorization": f"Bearer {_siliconflow_key()}",
         "Content-Type": "application/json",
     }
-    url = f"{_siliconflow_base()}/video/status"
+    base = _siliconflow_base()
+
     for attempt in range(1, _MAX_POLL_ATTEMPTS + 1):
-        async with httpx.AsyncClient() as client:
-            resp = await client.get(
-                url,
-                headers=headers,
-                params={"request_id": request_id},
-                timeout=30,
-            )
-            resp.raise_for_status()
-            data = resp.json()
-        status: str = (data.get("status") or "running").lower()
-        if status in ("succeeded", "completed", "done"):
+        data = None
+
+        # Try POST /video/status with requestId in body (primary)
+        try:
+            async with httpx.AsyncClient() as client:
+                resp = await client.post(
+                    f"{base}/video/status",
+                    headers=headers,
+                    json={"requestId": request_id},
+                    timeout=30,
+                )
+                if resp.status_code not in (404,):
+                    resp.raise_for_status()
+                    data = resp.json()
+        except Exception:
+            pass
+
+        # Fallback: GET /video/query?id=
+        if data is None:
+            try:
+                async with httpx.AsyncClient() as client:
+                    resp = await client.get(
+                        f"{base}/video/query",
+                        headers=headers,
+                        params={"id": request_id},
+                        timeout=30,
+                    )
+                    if resp.status_code not in (404,):
+                        resp.raise_for_status()
+                        data = resp.json()
+            except Exception:
+                pass
+
+        if data is None:
+            await asyncio.sleep(_DEFAULT_POLL_INTERVAL)
+            continue
+
+        # Some APIs return status in camelCase (e.g. "Succeed", "Running", "Failed")
+        raw_status = str(data.get("status") or "running").lower()
+        if raw_status in ("succeeded", "completed", "done", "succeed"):
+            # Try common video URL field names from SiliconFlow responses
             video_url = (
-                data.get("video_url")
+                data.get("videoUrl")
+                or data.get("video_url")
                 or data.get("output")
+                or data.get("result", {}).get("videoUrl")
                 or data.get("result", {}).get("video_url")
+                or data.get("video")
                 or ""
             )
             if video_url:
                 return video_url
             raise RuntimeError(f"Task done but no video_url in response: {data}")
-        if status in ("failed", "error"):
+        if raw_status in ("failed", "error"):
             raise RuntimeError(data.get("error") or data.get("message") or "Unknown error")
         await asyncio.sleep(_DEFAULT_POLL_INTERVAL)
     raise TimeoutError(f"Task {request_id} did not complete within timeout")
@@ -129,7 +176,7 @@ async def generate_video_from_script(
         logger.info("📹 Submitting Wan T2V job via SiliconFlow...")
         try:
             request_id = await _submit_wan_task(prompt, size="1280x720", duration=5)
-            logger.info("Wan T2V task submitted: %s", request_id[:10])
+            logger.info("Wan T2V task submitted, id=%s", request_id)
             video_url = await _poll_wan_task(request_id)
             logger.info("Wan T2V completed, URL: %s", video_url[:60])
             # Download the result to the local output path

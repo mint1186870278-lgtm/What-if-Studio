@@ -10,7 +10,7 @@ from fastapi.responses import StreamingResponse, FileResponse
 from sqlalchemy.orm import Session as DBSession
 from pathlib import Path
 
-from src.db import get_db
+from src.db import get_db, SessionLocal
 from src.models import Session, VideoJob, Asset
 from src.schemas import VideoJobCreate, VideoJobResponse
 from src.config import settings
@@ -24,18 +24,21 @@ async def process_video_job_background(
     job_id: str,
     session_id: str,
     asset_ids: list[str],
-    db: DBSession,
 ):
-    """Background task to process video job through pipeline stages"""
+    """Background task to process video job through pipeline stages.
+
+    Creates its own DB session to avoid sharing with the SSE generator.
+    """
+    db = SessionLocal()
     try:
         job = db.query(VideoJob).filter(VideoJob.id == job_id).first()
         if not job:
-            logger.error(f"Job {job_id} not found")
+            logger.error("Job %s not found", job_id)
             return
 
         session = db.query(Session).filter(Session.id == session_id).first()
         if not session:
-            logger.error(f"Session {session_id} not found")
+            logger.error("Session %s not found", session_id)
             return
 
         # Stage 1: Collect
@@ -76,24 +79,30 @@ async def process_video_job_background(
             logger.info("✅ Video generated: %s", actual_path)
         except Exception as render_err:
             logger.error("Video generation failed: %s", render_err)
-            # Still set path so the SSE stream completes
-            job.output_path = output_path
+            # Still set output_path so the download endpoint can serve the file
+            # (generate_video_from_script writes a placeholder on failure)
+            if not job.output_path:
+                job.output_path = output_path
 
         await asyncio.sleep(1)
 
         # Stage 6: Deliver
         job.phase = "deliver"
-
         job.status = "done"
         db.commit()
 
-        logger.info(f"✅ Video job completed: {job_id}")
+        logger.info("✅ Video job completed: %s", job_id)
 
     except Exception as e:
-        logger.error(f"❌ Video job failed: {e}")
-        job.status = "failed"
-        job.error = str(e)
-        db.commit()
+        logger.error("❌ Video job failed: %s", e)
+        try:
+            job.status = "failed"
+            job.error = str(e)
+            db.commit()
+        except Exception:
+            pass
+    finally:
+        db.close()
 
 
 async def generate_video_progress_stream(
@@ -104,14 +113,15 @@ async def generate_video_progress_stream(
 ) -> AsyncGenerator[str, None]:
     """Generate SSE stream for video job progress"""
     try:
-        job = db.query(VideoJob).filter(VideoJob.id == job_id).first()
-        if not job:
+        # Verify job exists before starting background task
+        initial_job = db.query(VideoJob).filter(VideoJob.id == job_id).first()
+        if not initial_job:
             yield f"data: {json.dumps({'error': 'Job not found'})}\n\n"
             return
 
-        # Start background processing task
+        # Start background processing task with its own DB session
         task = asyncio.create_task(
-            process_video_job_background(job_id, session_id, asset_ids, db)
+            process_video_job_background(job_id, session_id, asset_ids)
         )
 
         # Stream progress events
@@ -127,6 +137,8 @@ async def generate_video_progress_stream(
         completed_stages = set()
 
         while not task.done():
+            # Expire all cached objects to see background task's committed changes
+            db.expire_all()
             job = db.query(VideoJob).filter(VideoJob.id == job_id).first()
 
             if job and job.phase not in completed_stages:
@@ -146,7 +158,24 @@ async def generate_video_progress_stream(
 
             await asyncio.sleep(0.5)
 
+        # Check if the background task itself raised an unhandled exception
+        try:
+            exc = task.exception()
+            if exc:
+                logger.error("Background task crashed: %s", exc)
+                event = {
+                    "type": "error",
+                    "status": "failed",
+                    "error": str(exc),
+                    "message": f"视频生成任务异常：{exc}",
+                }
+                yield f"data: {json.dumps(event)}\n\n"
+                return
+        except (asyncio.CancelledError, RuntimeError):
+            pass
+
         # Get final job state
+        db.expire_all()
         job = db.query(VideoJob).filter(VideoJob.id == job_id).first()
         if job:
             if job.status == "done":
@@ -161,14 +190,14 @@ async def generate_video_progress_stream(
                     "type": "error",
                     "status": "failed",
                     "error": job.error,
-                    "message": "视频生成失败",
+                    "message": job.error or "视频生成失败",
                 }
             yield f"data: {json.dumps(event)}\n\n"
 
-        logger.info(f"✅ Video progress stream completed for job {job_id}")
+        logger.info("✅ Video progress stream completed for job %s", job_id)
 
     except Exception as e:
-        logger.error(f"❌ Video progress stream error: {e}")
+        logger.error("❌ Video progress stream error: %s", e)
         yield f"data: {json.dumps({'error': str(e)})}\n\n"
 
 

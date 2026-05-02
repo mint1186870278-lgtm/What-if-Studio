@@ -90,10 +90,11 @@ async def general_exception_handler(request, exc):
 
 
 # Include API routes
-from src.api import projects, assets, jobs, gateway, agents
+from src.api import projects, assets, sessions, jobs, gateway, agents
 
 app.include_router(projects.router, prefix="/api", tags=["projects"])
 app.include_router(assets.router, prefix="/api", tags=["assets"])
+app.include_router(sessions.router, prefix="/api", tags=["sessions"])
 app.include_router(jobs.router, prefix="/api", tags=["jobs"])
 app.include_router(gateway.router, prefix="/api", tags=["gateway"])  # Gateway routes
 app.include_router(agents.router, prefix="/api", tags=["agents"])

@@ -236,6 +236,7 @@ let scriptReviewOpenedAtMs = 0;
 let discussionPlaybackQueue = [];
 let discussionPlaybackDone = false;
 const discussionChunkBySpeaker = new Map();
+let renderedTurnKeys = null;
 
 function setProjectQuery(projectId) {
   const url = new URL(window.location.href);
@@ -505,6 +506,20 @@ function sleep(ms) {
   return new Promise((resolve) => window.setTimeout(resolve, ms));
 }
 
+function cleanContent(text) {
+  // Strip <think>...</think> blocks (including nested)
+  let cleaned = String(text || "").replace(/<think>[\s\S]*?<\/think>/gi, "");
+  // Strip JOIN: / SKIP: prefix and any leading whitespace/punctuation
+  cleaned = cleaned.replace(/^\s*(JOIN|SKIP)\s*:\s*/i, "");
+  // Strip leading instruction-like boilerplate (e.g. "JOIN: 我认为" → "我认为")
+  cleaned = cleaned.replace(/^\s*(?:JOIN|SKIP)\s*[：:]\s*/, "");
+  // Strip FINAL_JSON and everything after (structured output, not discussion)
+  cleaned = cleaned.replace(/\s*FINAL_JSON\s*[\s\S]*/gi, "");
+  // Strip markdown headers
+  cleaned = cleaned.replace(/^#{1,6}\s+/gm, "");
+  return cleaned.trim();
+}
+
 function calcPlaybackDelay(text, fallback = 760) {
   const length = String(text || "").trim().length;
   if (!length) return fallback;
@@ -526,7 +541,7 @@ async function replayDiscussionEvent(turn) {
     ensureDiscussionSection(turn.stage);
     if (speakerAgent) {
       updateActiveAgentsFromNames([speakerAgent.name], speakerAgent.name);
-      networkHandle.showAgentSpeech(speakerAgent.agentId, merged, {
+      networkHandle.showAgentSpeech(speakerAgent.agentId, cleanContent(merged), {
         duration: 30000,
         force: true,
         append: false
@@ -538,8 +553,13 @@ async function replayDiscussionEvent(turn) {
     const speakerAgent = findAgentBySpeaker(turn.speaker);
     const speaker = String(turn.speaker || "").trim();
     const chunkMerged = speaker ? discussionChunkBySpeaker.get(speaker) || "" : "";
-    const finalContent = chunkMerged || String(turn.content || "");
+    const finalContent = cleanContent(chunkMerged || String(turn.content || ""));
     if (speaker) discussionChunkBySpeaker.delete(speaker);
+    // Dedup: skip if same speaker+content already rendered anywhere in this discussion (AG2 sometimes emits duplicate messages)
+    const turnKey = `${speaker}|${finalContent}`;
+    if (renderedTurnKeys && renderedTurnKeys.has(turnKey)) return;
+    if (renderedTurnKeys) renderedTurnKeys.add(turnKey);
+    if (!finalContent) return;
     ensureDiscussionSection(turn.stage);
     renderMessageLine(turn.speaker, finalContent);
     latestDiscussionTranscript.push(`${resolveSpeakerDisplayName(turn.speaker)}：${finalContent}`);
@@ -664,6 +684,7 @@ function openLive(question) {
   queueText.textContent = "LIVE";
   clearStreamRetryAction();
   discussionChunkBySpeaker.clear();
+  renderedTurnKeys = new Set();
   lastPhaseSection = "";
   ensureDiscussionSection("briefing");
   renderSystemLine("导演组就位，讨论系统启动。");

@@ -170,6 +170,9 @@ async def _generate_project_discussion_stream(project: Project, db: Session):
             user_request=project.prompt or "",
             style=project.style_preference or "auto",
         ):
+            # Map type → event for frontend compatibility
+            if "type" in event and "event" not in event:
+                event["event"] = event["type"]
             yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
             if event.get("type") == "turn":
                 turns.append(event)

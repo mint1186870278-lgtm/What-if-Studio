@@ -78,7 +78,7 @@ def _model_client() -> "OpenAIChatCompletionClient":
         "api_key": settings.openai_api_key,
         "base_url": base_url,
         "temperature": 0.7,
-        "max_tokens": 200,
+        "max_tokens": 500,
     }
     model_info = _infer_model_info(model_name)
     if model_info is not None:
@@ -113,7 +113,7 @@ def _build_team() -> tuple[Any, Any]:
             model_client=client,
             system_message=(
                 "你是NarrativeDirector。开头必须说JOIN:或SKIP:。"
-                "如果SKIP，说一句理由就结束。如果JOIN，每轮只说一句话（不超过50字）。必须用中文。"
+                "如果SKIP，说一句理由就结束。如果JOIN，每轮只说一句话（不超过100字）。必须用中文。"
             ),
             model_client_stream=True,
         ),
@@ -123,7 +123,7 @@ def _build_team() -> tuple[Any, Any]:
             model_client=client,
             system_message=(
                 "你是VisualDirector。开头必须说JOIN:或SKIP:。"
-                "如果SKIP，说一句理由就结束。如果JOIN，每轮只说一句话（不超过50字）。必须用中文。"
+                "如果SKIP，说一句理由就结束。如果JOIN，每轮只说一句话（不超过100字）。必须用中文。"
             ),
             model_client_stream=True,
         ),
@@ -133,7 +133,7 @@ def _build_team() -> tuple[Any, Any]:
             model_client=client,
             system_message=(
                 "你是SoundDirector。开头必须说JOIN:或SKIP:。"
-                "如果SKIP，说一句理由就结束。如果JOIN，每轮只说一句话（不超过50字）。必须用中文。"
+                "如果SKIP，说一句理由就结束。如果JOIN，每轮只说一句话（不超过100字）。必须用中文。"
             ),
             model_client_stream=True,
         ),
@@ -143,7 +143,7 @@ def _build_team() -> tuple[Any, Any]:
             model_client=client,
             system_message=(
                 "你是MaterialDirector。开头必须说JOIN:或SKIP:。"
-                "如果SKIP，说一句理由就结束。如果JOIN，每轮只说一句话（不超过50字）。必须用中文。"
+                "如果SKIP，说一句理由就结束。如果JOIN，每轮只说一句话（不超过100字）。必须用中文。"
             ),
             model_client_stream=True,
         ),
@@ -158,7 +158,7 @@ def _build_team() -> tuple[Any, Any]:
             model_client_stream=True,
         ),
     ]
-    termination = MaxMessageTermination(max_messages=10)
+    termination = MaxMessageTermination(max_messages=20)
     team = RoundRobinGroupChat(
         participants=participants,
         termination_condition=termination,
@@ -184,12 +184,19 @@ def _message_to_event(message: Any, id_by_py_name: dict[str, str] | None = None)
 
 
 def _clean_content(content: str) -> str:
-    """Remove thinking tags and leading English, keep only Chinese."""
+    """Remove thinking tags, leading English, FINAL_JSON, and markdown headers; keep only discussion text."""
     import re
     # Remove <think>...</think> blocks
     cleaned = re.sub(r"<think>.*?</think>", "", content, flags=re.DOTALL)
     # Remove leading English text before Chinese starts (e.g. "I think we should...方案是")
     cleaned = re.sub(r"^[A-Za-z,\s;:!.'\"()]+(?=[一-鿿])", "", cleaned)
+    # Remove FINAL_JSON and everything after it (structured output not for discussion display)
+    cleaned = re.sub(r"\s*FINAL_JSON\s*[\s\S]*", "", cleaned, flags=re.DOTALL)
+    # Remove markdown headers (# ## etc) for natural language view
+    cleaned = re.sub(r"^#{1,6}\s+", "", cleaned, flags=re.MULTILINE)
+    # Trim each line to remove leading artifact markers
+    lines = [line.strip().lstrip("*-") for line in cleaned.split("\n")]
+    cleaned = "\n".join(line for line in lines if line.strip())
     return cleaned.strip()
 
 
@@ -256,7 +263,7 @@ async def run_autogen_discussion_stream(
         "Phase 1: each director says JOIN: or SKIP:.\n"
         "Phase 2: joined directors debate briefly.\n"
         "Phase 3: Critic writes a Markdown script and ends with FINAL_JSON.\n"
-        "所有回答必须用中文。回答尽量简短。"
+        "所有回答必须用中文。回答尽量有深度，充分讨论后再给出结论。"
     )
 
     final_text = ""

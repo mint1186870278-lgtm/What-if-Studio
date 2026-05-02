@@ -117,36 +117,41 @@ async def invocations_stream(db: DBSession):
     """SSE stream for new invocation rows using incremental polling."""
     last_seen_ts: datetime | None = None
     last_seen_id: str | None = None
-    while True:
-        query = db.query(ANetInvocation)
-        if last_seen_ts is not None:
-            query = query.filter(
-                and_(
-                    ANetInvocation.timestamp >= last_seen_ts,
-                )
-            )
-        items = query.order_by(ANetInvocation.timestamp.asc(), ANetInvocation.id.asc()).limit(100).all()
-        emitted = False
-        for i in items:
+    try:
+        while True:
+            query = db.query(ANetInvocation)
             if last_seen_ts is not None:
-                same_ts = i.timestamp == last_seen_ts
-                if i.timestamp < last_seen_ts:
-                    continue
-                if same_ts and last_seen_id is not None and str(i.id) <= str(last_seen_id):
-                    continue
-            data = {
-                "id": i.id,
-                "service_name": i.service_name,
-                "status": i.status,
-                "timestamp": i.timestamp.isoformat(),
-            }
-            yield f"data: {json.dumps(data)}\n\n"
-            emitted = True
-            last_seen_ts = i.timestamp
-            last_seen_id = str(i.id)
-        if not emitted:
-            await asyncio.sleep(1)
-
+                query = query.filter(
+                    and_(
+                        ANetInvocation.timestamp >= last_seen_ts,
+                    )
+                )
+            items = query.order_by(ANetInvocation.timestamp.asc(), ANetInvocation.id.asc()).limit(100).all()
+            emitted = False
+            for i in items:
+                if last_seen_ts is not None:
+                    same_ts = i.timestamp == last_seen_ts
+                    if i.timestamp < last_seen_ts:
+                        continue
+                    if same_ts and last_seen_id is not None and str(i.id) <= str(last_seen_id):
+                        continue
+                data = {
+                    "id": i.id,
+                    "service_name": i.service_name,
+                    "status": i.status,
+                    "timestamp": i.timestamp.isoformat(),
+                }
+                yield f"data: {json.dumps(data)}\n\n"
+                emitted = True
+                last_seen_ts = i.timestamp
+                last_seen_id = str(i.id)
+            if not emitted:
+                yield ": heartbeat\n\n"
+                await asyncio.sleep(1)
+    except GeneratorExit:
+        pass
+    except Exception as exc:
+        logger.warning("invocations_stream ended: %s", exc)
 
 @router.get("/gateway/invocations/events")
 async def gateway_invocations_events(db: DBSession = Depends(get_db)):

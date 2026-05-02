@@ -46,6 +46,7 @@ class Settings(BaseSettings):
     openai_api_key: str = os.getenv("OPENAI_API_KEY", "")
     openai_base_url: str = os.getenv("OPENAI_BASE_URL", "")
     openai_model: str = os.getenv("OPENAI_MODEL", os.getenv("AUTOGEN_MODEL", ""))
+    siliconflow_api_key: str = os.getenv("SILICONFLOW_API_KEY", "")
 
     @field_validator("debug", mode="before")
     @classmethod
