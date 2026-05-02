@@ -28,11 +28,7 @@ async def list_services():
     ANet registry or service discovery."""
     # Backend-local AutoGen services.
     services = [
-        {"name": "autogen-discussion", "capability": "multi_director_discussion_and_script"},
-        {"name": "autogen-edit", "capability": "propose_editing_plan"},
-        {"name": "autogen-sound", "capability": "compose_sound_design"},
-        {"name": "anet-video-editing", "capability": "render_video_from_session_script_and_assets"},
-        {"name": "video-editing-api", "capability": "legacy_alias_of_anet-video-editing"},
+        {"name": "yinanping-studio", "capability": "multi_agent_director_debate_and_video_editing_pipeline"},
     ]
     return {"services": services}
 

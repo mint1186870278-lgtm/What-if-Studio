@@ -87,32 +87,24 @@ def get_svc_client() -> Any:
 
 ANET_SERVICE_DEFINITIONS: list[dict[str, Any]] = [
     {
-        "name": "autogen-discussion",
+        "name": "yinanping-studio",
         "endpoint": "http://127.0.0.1:8000",
-        "paths": ["/api/sessions/{id}/stream", "/api/gateway/invoke"],
-        "tags": ["discussion", "director", "autogen", "debate"],
-        "description": "Multi-director debate and markdown script generation",
-    },
-    {
-        "name": "autogen-edit",
-        "endpoint": "http://127.0.0.1:8000",
-        "paths": ["/api/gateway/invoke"],
-        "tags": ["edit", "video", "autogen"],
-        "description": "Editing plan and shot-sequence suggestions",
-    },
-    {
-        "name": "autogen-sound",
-        "endpoint": "http://127.0.0.1:8000",
-        "paths": ["/api/gateway/invoke"],
-        "tags": ["sound", "audio", "autogen"],
-        "description": "Sound design and music composition suggestions",
-    },
-    {
-        "name": "anet-video-editing",
-        "endpoint": "http://127.0.0.1:8000",
-        "paths": ["/api/gateway/invoke"],
-        "tags": ["video", "render", "seedance"],
-        "description": "Video rendering from session script and assets",
+        "paths": [
+            "/api/sessions/{id}/stream",
+            "/api/gateway/invoke",
+            "/api/video-jobs",
+            "/api/video-jobs/{id}/events",
+            "/api/projects",
+            "/api/sessions",
+        ],
+        "tags": [
+            "video-editing",
+            "ai-agent",
+            "debate",
+            "hackathon",
+            "autogen",
+        ],
+        "description": "AI video editing studio with multi-agent director debate, script generation, and video rendering pipeline",
     },
 ]
 
