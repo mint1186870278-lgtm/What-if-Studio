@@ -1,0 +1,102 @@
+# Agent profiles used by /api/agents and AutoGen discussion.
+agents:
+  - id: rowling
+    name: "J.K.罗琳"
+    role: guardian
+    stance: "HE可以有，但必须保留代价。"
+    avatar_url: "/avatars/rowling.png"
+    home: [0.75, 0.2]
+    interest_tags: ["fantasy", "adaptation", "drama"]
+
+  - id: tolkien
+    name: "J.R.R.托尔金"
+    role: guardian
+    stance: "救赎成立，但不可抹去失去。"
+    avatar_url: "/avatars/tolkien.png"
+    home: [0.8, 0.25]
+    interest_tags: ["epic", "fantasy", "adaptation"]
+
+  - id: columbus
+    name: "Chris Columbus"
+    role: director
+    stance: "让观众看到希望和团圆。"
+    avatar_url: "/avatars/columbus.png"
+    home: [0.7, 0.28]
+    interest_tags: ["romance", "fantasy", "family"]
+
+  - id: cuaron
+    name: "Alfonso Cuaron"
+    role: director
+    stance: "克制镜头，情绪留给观众。"
+    avatar_url: "/avatars/cuaron.png"
+    home: [0.78, 0.3]
+    interest_tags: ["drama", "realism", "adaptation"]
+
+  - id: newell
+    name: "Mike Newell"
+    role: director
+    stance: "关系修复要有冒险过程。"
+    avatar_url: "/avatars/newell.png"
+    home: [0.72, 0.33]
+    interest_tags: ["drama", "epic"]
+
+  - id: yates
+    name: "David Yates"
+    role: director
+    stance: "黑暗叙事中挤出一线生机。"
+    avatar_url: "/avatars/yates.png"
+    home: [0.82, 0.22]
+    interest_tags: ["dark", "epic", "fantasy"]
+
+  - id: jackson
+    name: "彼得·杰克逊"
+    role: director
+    stance: "营救必须有史诗规模。"
+    avatar_url: "/avatars/jackson.png"
+    home: [0.76, 0.35]
+    interest_tags: ["epic", "fantasy"]
+
+  - id: burton
+    name: "蒂姆·伯顿"
+    role: director
+    stance: "生死边界可以被魔法扭转。"
+    avatar_url: "/avatars/burton.png"
+    home: [0.68, 0.32]
+    interest_tags: ["fantasy", "dark"]
+
+  - id: spielberg
+    name: "斯皮尔伯格"
+    role: director
+    stance: "让亲情成为结局锚点。"
+    avatar_url: "/avatars/spielberg.png"
+    home: [0.74, 0.38]
+    interest_tags: ["romance", "drama", "family"]
+
+  - id: curtis
+    name: "理查德·柯蒂斯"
+    role: director
+    stance: "观众值得一个拥抱式HE。"
+    avatar_url: "/avatars/curtis.png"
+    home: [0.8, 0.38]
+    interest_tags: ["romance", "healing"]
+
+  - id: editor
+    name: "剪辑师"
+    role: crew
+    stance: "控制节奏和情绪峰值。"
+    home: [0.2, 0.75]
+    interest_tags: ["drama", "epic", "adaptation"]
+
+  - id: composer
+    name: "配乐师"
+    role: crew
+    stance: "用BGM锁定泪点。"
+    home: [0.78, 0.75]
+    interest_tags: ["epic", "romance", "fantasy"]
+
+  - id: collector
+    name: "素材侦探"
+    role: crew
+    stance: "优先补齐关键叙事镜头。"
+    home: [0.18, 0.25]
+    interest_tags: ["adaptation", "drama"]

@@ -12,7 +12,6 @@ from fastapi.staticfiles import StaticFiles
 
 from src.config import settings
 from src.db import init_db
-from src.core.anet_gateway import register_anet_services, unregister_anet_services
 
 # Configure logging
 logging.basicConfig(level=settings.log_level)
@@ -29,22 +28,10 @@ async def lifespan(app: FastAPI):
     init_db()
     logger.info("✅ Database initialized")
 
-    # Register services on the ANet P2P mesh (if daemon is running)
-    registered = await register_anet_services()
-    if registered:
-        logger.info("✅ Registered %d ANet services", len(registered))
-    else:
-        logger.info(
-            "ANet daemon not detected — ANet service exposure is disabled in this run. "
-            "Install anet CLI (curl -fsSL https://agentnetwork.org.cn/install.sh | sh) "
-            "and run 'anet daemon &' to enable P2P agent mesh."
-        )
-
     yield
 
     # Shutdown
     logger.info("🛑 Shutting down whatif-studio API")
-    await unregister_anet_services()
 
 
 # Create FastAPI application
@@ -72,12 +59,6 @@ async def health_check():
     return {"status": "ok", "service": "whatif-studio"}
 
 
-@app.get("/api/health")
-async def api_health_check():
-    """API health check endpoint"""
-    return {"status": "ok", "service": "whatif-studio"}
-
-
 # Error handlers
 @app.exception_handler(Exception)
 async def general_exception_handler(request, exc):
@@ -90,13 +71,14 @@ async def general_exception_handler(request, exc):
 
 
 # Include API routes
-from src.api import projects, assets, jobs, gateway, agents
+from src.api import projects, assets, agents
 
-app.include_router(projects.router, prefix="/api", tags=["projects"])
-app.include_router(assets.router, prefix="/api", tags=["assets"])
-app.include_router(jobs.router, prefix="/api", tags=["jobs"])
-app.include_router(gateway.router, prefix="/api", tags=["gateway"])  # Gateway routes
-app.include_router(agents.router, prefix="/api", tags=["agents"])
+app.include_router(projects.router, tags=["projects"])
+app.include_router(assets.router, tags=["assets"])
+app.include_router(agents.router, tags=["agents"])
+
+settings.ensure_storage_paths()
+app.mount("/storage", StaticFiles(directory=settings.storage_path), name="storage")
 
 
 def resolve_frontend_dist_dir() -> Path:
@@ -108,7 +90,7 @@ def mount_frontend_assets(application: FastAPI) -> None:
     if not dist_dir.exists():
         logger.warning("Frontend dist directory not found: %s", dist_dir)
         return
-    for folder in ("assets", "mock", "background"):
+    for folder in ("assets",):
         target = dist_dir / folder
         if target.exists():
             application.mount(f"/{folder}", StaticFiles(directory=target), name=f"frontend-{folder}")
@@ -128,7 +110,12 @@ async def serve_frontend_index():
 
 @app.get("/{full_path:path}", include_in_schema=False)
 async def spa_fallback(full_path: str):
-    if full_path.startswith("api/") or full_path == "health" or full_path == "api/health":
+    if (
+        full_path.startswith("projects")
+        or full_path.startswith("agents")
+        or full_path.startswith("storage")
+        or full_path == "health"
+    ):
         return JSONResponse(status_code=404, content={"detail": "Not Found"})
 
     dist_dir = resolve_frontend_dist_dir()

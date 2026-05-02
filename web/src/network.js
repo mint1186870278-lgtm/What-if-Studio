@@ -1,5 +1,4 @@
 import * as d3 from "d3";
-import { getDisplayName } from "./displayNames";
 
 function nodeColor(type) {
   if (type === "guardian") return "#c9a84c";
@@ -106,7 +105,7 @@ export function createNetwork(svgElement, agents, handlers = {}) {
 
   studioLayer
     .append("image")
-    .attr("href", "/background/studio_floorplan_v15.svg")
+    .attr("href", "/background.svg")
     .attr("x", backgroundOffsetX)
     .attr("y", backgroundOffsetY)
     .attr("width", backgroundWidth)
@@ -226,7 +225,7 @@ export function createNetwork(svgElement, agents, handlers = {}) {
     .attr("x", 0)
     .attr("y", 24)
     .attr("text-anchor", "middle")
-    .text((d) => getDisplayName(d).zh);
+    .text((d) => d.name || "");
 
   node
     .append("text")
@@ -234,7 +233,7 @@ export function createNetwork(svgElement, agents, handlers = {}) {
     .attr("x", 0)
     .attr("y", 35)
     .attr("text-anchor", "middle")
-    .text((d) => getDisplayName(d).en);
+    .text("");
 
   const speechGroup = speechLayer
     .selectAll("g")
@@ -730,15 +729,7 @@ export function createNetwork(svgElement, agents, handlers = {}) {
     const target = String(name || "").trim();
     if (!target) return null;
     return (
-      nodes.find((nodeItem) => {
-        const display = getDisplayName(nodeItem);
-        return (
-          nodeItem.name === target ||
-          nodeItem.agentId === target ||
-          display.zh === target ||
-          display.en === target
-        );
-      }) || null
+      nodes.find((nodeItem) => nodeItem.name === target || nodeItem.agentId === target) || null
     );
   }
 

@@ -1,6 +1,7 @@
 """Project management API routes"""
 
 import logging
+import asyncio
 from uuid import UUID
 from typing import List
 from datetime import datetime
@@ -11,7 +12,7 @@ from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 
 from src.db import get_db
-from src.models import Project, Asset, Session as DBSession, VideoJob
+from src.models import Project, Asset
 from src.schemas import ProjectCreate, ProjectUpdate, ProjectResponse
 from src.agents import run_autogen_discussion_stream
 
@@ -139,9 +140,7 @@ async def delete_project(
                 detail=f"Project {project_id} not found",
             )
 
-        # Delete associated sessions and assets
         db.query(Asset).filter(Asset.project_id == project_id_str).delete()
-        db.query(DBSession).filter(DBSession.project_id == project_id_str).delete()
 
         # Delete project
         db.delete(project)
@@ -159,19 +158,21 @@ async def delete_project(
         )
 
 
-async def _generate_project_discussion_stream(project: Project, db: Session):
+async def _prepare_project_stream(project: Project, db: Session):
     turns = []
     script = ""
     project.discussion_status = "running"
     db.commit()
-    yield f"data: {json.dumps({'type': 'system', 'content': 'discussion_started'}, ensure_ascii=False)}\n\n"
     try:
         async for event in run_autogen_discussion_stream(
             user_request=project.prompt or "",
             style=project.style_preference or "auto",
         ):
+            # Keep the API intentionally thin: frontend receives AutoGen events as-is.
             yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
             if event.get("type") == "turn":
+                turns.append(event)
+            elif event.get("type") == "turn_chunk":
                 turns.append(event)
             elif event.get("type") == "script":
                 script = str(event.get("script", ""))
@@ -188,8 +189,8 @@ async def _generate_project_discussion_stream(project: Project, db: Session):
         yield f"data: {json.dumps({'type': 'error', 'message': str(exc)}, ensure_ascii=False)}\n\n"
 
 
-@router.post("/projects/{project_id}/script/stream")
-async def generate_project_script_stream(
+@router.post("/{project_id}/prepare")
+async def prepare_project(
     project_id: UUID,
     db: Session = Depends(get_db),
 ):
@@ -200,14 +201,37 @@ async def generate_project_script_stream(
     if not (project.prompt or "").strip():
         raise HTTPException(status_code=400, detail="Project prompt is empty")
     return StreamingResponse(
-        _generate_project_discussion_stream(project, db),
+        _prepare_project_stream(project, db),
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
 
 
-@router.post("/projects/{project_id}/video-jobs")
-async def create_project_video_job(
+async def _generate_project_stream(project: Project, db: Session):
+    phases = [
+        ("collect", "收集工程素材与剧本"),
+        ("analyze", "分析镜头、声音和素材约束"),
+        ("edit", "生成剪辑执行计划"),
+        ("render", "等待视频生成服务接入位置"),
+        ("deliver", "写入成片地址"),
+    ]
+    try:
+        for index, (phase, message) in enumerate(phases, start=1):
+            yield f"data: {json.dumps({'type': 'progress', 'event': 'progress', 'phase': phase, 'message': message, 'progress': index / len(phases)}, ensure_ascii=False)}\n\n"
+            await asyncio.sleep(0)
+
+        project.product = f"/storage/projects/{project.id}/product.mp4"
+        project.last_opened_at = datetime.utcnow()
+        db.commit()
+        yield f"data: {json.dumps({'type': 'complete', 'event': 'complete', 'phase': 'deliver', 'product': project.product, 'result': {'type': 'video-mp4-fallback', 'publicUrl': project.product}}, ensure_ascii=False)}\n\n"
+    except Exception as exc:
+        db.rollback()
+        logger.exception("Project generation failed: project_id=%s", project.id)
+        yield f"data: {json.dumps({'type': 'error', 'event': 'error', 'message': str(exc)}, ensure_ascii=False)}\n\n"
+
+
+@router.post("/{project_id}/generate")
+async def generate_project(
     project_id: UUID,
     db: Session = Depends(get_db),
 ):
@@ -217,38 +241,8 @@ async def create_project_video_job(
         raise HTTPException(status_code=404, detail=f"Project {project_id} not found")
     if not (project.script or "").strip():
         raise HTTPException(status_code=409, detail="Project script not generated yet")
-
-    session = db.query(DBSession).filter(DBSession.project_id == project_id_str).order_by(DBSession.created_at.desc()).first()
-    if not session:
-        session = DBSession(
-            project_id=project_id_str,
-            prompt=project.prompt or "",
-            style_preference=project.style_preference or "auto",
-            status="completed",
-            script=project.script or "",
-            discussion_history=project.discussion_history or [],
-        )
-        db.add(session)
-        db.commit()
-        db.refresh(session)
-    else:
-        session.prompt = project.prompt or ""
-        session.style_preference = project.style_preference or "auto"
-        session.script = project.script or ""
-        session.discussion_history = project.discussion_history or []
-        session.status = "completed"
-        db.commit()
-        db.refresh(session)
-
-    job = VideoJob(
-        session_id=str(session.id),
-        phase="collect",
-        status="pending",
-        script=project.script or "",
-        output_path=None,
+    return StreamingResponse(
+        _generate_project_stream(project, db),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
-    db.add(job)
-    project.last_opened_at = datetime.utcnow()
-    db.commit()
-    db.refresh(job)
-    return {"job": {"id": str(job.id), "jobId": str(job.id), "session_id": str(session.id), "status": job.status, "phase": job.phase}}

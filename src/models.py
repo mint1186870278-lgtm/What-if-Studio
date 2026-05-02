@@ -2,10 +2,8 @@
 
 from datetime import datetime
 from uuid import uuid4
-import uuid
-from sqlalchemy import Column, String, Integer, DateTime, Text, JSON, ForeignKey, Enum
+from sqlalchemy import Column, String, Integer, DateTime, Text, JSON, ForeignKey
 from sqlalchemy.orm import relationship
-import enum
 
 from src.db import Base
 
@@ -21,6 +19,7 @@ class Project(Base):
     prompt = Column(Text, nullable=True)
     style_preference = Column(String(50), default="auto", nullable=False)
     script = Column(Text, nullable=True)
+    product = Column(String(512), nullable=True)
     discussion_history = Column(JSON, default=list, nullable=False)
     discussion_status = Column(String(50), default="idle", nullable=False)
     last_opened_at = Column(DateTime, nullable=True)
@@ -29,7 +28,6 @@ class Project(Base):
     metadata_ = Column(JSON, default=dict, nullable=False)  # Custom fields
 
     assets = relationship("Asset", back_populates="project", cascade="all, delete-orphan")
-    sessions = relationship("Session", back_populates="project", cascade="all, delete-orphan")
 
 
 class Asset(Base):
@@ -49,57 +47,12 @@ class Asset(Base):
 
     project = relationship("Project", back_populates="assets")
 
+    @property
+    def asset_type(self) -> str:
+        return self.file_type
 
-class Session(Base):
-    """Creative session for a project"""
+    @property
+    def url(self) -> str:
+        normalized = str(self.file_path or "").replace("\\", "/")
+        return f"/storage/projects/{normalized}"
 
-    __tablename__ = "sessions"
-
-    id = Column(String(36), primary_key=True, default=lambda: str(uuid4()))
-    project_id = Column(String(36), ForeignKey("projects.id"), nullable=False, index=True)
-    prompt = Column(Text, nullable=False)  # User's input prompt
-    style_preference = Column(String(50), default="auto", nullable=False)
-    status = Column(String(50), default="active", nullable=False)  # 'active', 'completed', 'failed'
-    script = Column(Text, nullable=True)  # Markdown format script (initially empty)
-    discussion_history = Column(JSON, default=list, nullable=False)  # List of DiscussionTurn
-    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
-
-    project = relationship("Project", back_populates="sessions")
-    video_jobs = relationship("VideoJob", back_populates="session", cascade="all, delete-orphan")
-
-
-class VideoJob(Base):
-    """Video generation task"""
-
-    __tablename__ = "video_jobs"
-
-    id = Column(String(36), primary_key=True, default=lambda: str(uuid4()))
-    session_id = Column(String(36), ForeignKey("sessions.id"), nullable=False, index=True)
-    phase = Column(
-        String(50),
-        default="collect",
-        nullable=False,
-    )  # 'collect', 'analyze', 'discuss', 'edit', 'render', 'deliver'
-    status = Column(String(50), default="pending", nullable=False)  # 'pending', 'running', 'done', 'failed'
-    script = Column(Text, nullable=True)  # Markdown script
-    output_path = Column(String(512), nullable=True)  # Final video file path
-    error = Column(Text, nullable=True)
-    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
-
-    session = relationship("Session", back_populates="video_jobs")
-
-
-class ANetInvocation(Base):
-    """ANet agent service invocation log"""
-
-    __tablename__ = "anet_invocations"
-
-    id = Column(String(36), primary_key=True, default=lambda: str(uuid4()))
-    service_name = Column(String(255), nullable=False, index=True)
-    status = Column(String(50), nullable=False)  # 'pending', 'success', 'error'
-    payload = Column(JSON, nullable=True)
-    response = Column(JSON, nullable=True)
-    error = Column(Text, nullable=True)
-    timestamp = Column(DateTime, default=datetime.utcnow, nullable=False, index=True)

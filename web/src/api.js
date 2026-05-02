@@ -8,7 +8,7 @@ export function resolveApiBase() {
   const envBase = getViteEnvValue("VITE_API_BASE");
   if (envBase) return envBase.replace(/\/+$/, "");
   if (typeof window === "undefined") return "http://localhost:8000";
-  // Prefer same-origin /api in browser so dev proxy and production reverse-proxy both work.
+  // Prefer same-origin in browser so Vite proxy and production static hosting both work.
   return "";
 }
 
@@ -42,6 +42,7 @@ async function parseApiError(res, fallbackMessage) {
     if (data?.error?.message) return data.error.message;
     if (data?.error && typeof data.error === "string") return data.error;
     if (data?.message) return data.message;
+    if (data?.detail) return String(data.detail);
   } catch {
     // Ignore non-JSON error responses and fall back to generic text.
   }
@@ -49,7 +50,7 @@ async function parseApiError(res, fallbackMessage) {
 }
 
 export async function streamProjectDiscussion(projectId, onTurn) {
-  const res = await fetch(joinApiUrl(`/api/projects/${projectId}/script/stream`), {
+  const res = await fetch(joinApiUrl(`/${projectId}/prepare`), {
     method: "POST",
     headers: { "Content-Type": "application/json" }
   });
@@ -75,14 +76,32 @@ export async function streamProjectDiscussion(projectId, onTurn) {
   }
 }
 
-export async function createProjectVideoJob(projectId) {
-  const res = await fetch(joinApiUrl(`/api/projects/${projectId}/video-jobs`), {
+export async function streamProjectGeneration(projectId, onEvent) {
+  const res = await fetch(joinApiUrl(`/${projectId}/generate`), {
     method: "POST",
     headers: { "Content-Type": "application/json" }
   });
-  if (!res.ok) throw new Error(await parseApiError(res, "视频任务创建失败"));
-  const data = await res.json();
-  return data?.job ? data : { job: { ...data, jobId: data.id } };
+  if (!res.ok || !res.body) {
+    throw new Error(await parseApiError(res, "视频生成流打开失败"));
+  }
+
+  const decoder = new TextDecoder();
+  const reader = res.body.getReader();
+  let buffer = "";
+
+  while (true) {
+    const chunk = await reader.read();
+    if (chunk.done) break;
+    buffer += decoder.decode(chunk.value, { stream: true });
+    const events = buffer.split("\n\n");
+    buffer = events.pop() || "";
+    for (const raw of events) {
+      const payload = parseSseDataLine(raw);
+      if (!payload) continue;
+      const mapped = payload.type ? { ...payload, event: payload.event || payload.type } : payload;
+      onEvent(mapped);
+    }
+  }
 }
 
 export async function uploadVideoSource(projectId, file) {
@@ -91,7 +110,7 @@ export async function uploadVideoSource(projectId, file) {
   const formData = new FormData();
   formData.append("file", file, fileName);
   formData.append("asset_type", "video");
-  const res = await fetch(joinApiUrl(`/api/projects/${projectId}/assets`), {
+  const res = await fetch(joinApiUrl(`/${projectId}/assets`), {
     method: "POST",
     body: formData
   });
@@ -101,44 +120,20 @@ export async function uploadVideoSource(projectId, file) {
 }
 
 export async function fetchAgents() {
-  const res = await fetch(joinApiUrl("/api/agents"));
+  const res = await fetch(joinApiUrl("/agents"));
   if (!res.ok) throw new Error(await parseApiError(res, "角色列表加载失败"));
   const data = await res.json();
   return Array.isArray(data?.agents) ? data.agents : [];
 }
 
-export function watchVideoJob(jobId, onEvent, options = {}) {
-  const source = new EventSource(joinApiUrl(`/api/video-jobs/${jobId}/events`));
-  source.onmessage = (event) => {
-    const payload = safeParseJson(event.data);
-    if (!payload) return;
-    const mapped = payload.type ? { ...payload, event: payload.type } : payload;
-    if (mapped.event === "complete") {
-      mapped.result = {
-        type: "video-mp4",
-        publicUrl: joinApiUrl(`/api/video-jobs/${jobId}/output`),
-        outputPath: mapped.output_path || "",
-      };
-    }
-    onEvent(mapped);
-    if (mapped.event === "complete" || mapped.event === "error") source.close();
-  };
-  source.onerror = () => {
-    if (typeof options.onDisconnect === "function") options.onDisconnect();
-    onEvent({ event: "error", message: "任务事件流中断，请稍后重试。" });
-    source.close();
-  };
-  return () => source.close();
-}
-
 export async function getProject(projectId) {
-  const res = await fetch(joinApiUrl(`/api/projects/${projectId}`));
+  const res = await fetch(joinApiUrl(`/projects/${projectId}`));
   if (!res.ok) throw new Error(await parseApiError(res, "工程加载失败"));
   return res.json();
 }
 
 export async function createProject(payload) {
-  const res = await fetch(joinApiUrl("/api/projects"), {
+  const res = await fetch(joinApiUrl("/projects"), {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
@@ -148,7 +143,7 @@ export async function createProject(payload) {
 }
 
 export async function updateProject(projectId, payload) {
-  const res = await fetch(joinApiUrl(`/api/projects/${projectId}`), {
+  const res = await fetch(joinApiUrl(`/projects/${projectId}`), {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),

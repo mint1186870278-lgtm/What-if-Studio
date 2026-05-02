@@ -5,9 +5,9 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-from pathlib import Path
 from typing import Any, AsyncGenerator
 from src.config import settings
+from src.core.agent_catalog import load_agent_map
 
 logger = logging.getLogger(__name__)
 
@@ -43,18 +43,11 @@ def _infer_model_info(model_name: str) -> dict[str, Any] | None:
 
 
 def _load_agent_catalog() -> dict[str, dict[str, Any]]:
-    repo_root = Path(__file__).resolve().parents[2]
-    candidates = [
-        repo_root / "web" / "public" / "mock" / "agents.json",
-        repo_root / "web" / "dist" / "mock" / "agents.json",
-    ]
-    for path in candidates:
-        if path.exists():
-            with path.open("r", encoding="utf-8") as f:
-                raw = json.load(f)
-            if isinstance(raw, list):
-                return {str(item.get("agentId")): item for item in raw if isinstance(item, dict) and item.get("agentId")}
-    return {}
+    try:
+        return load_agent_map()
+    except Exception:
+        logger.warning("Failed to load agent catalog from config", exc_info=True)
+        return {}
 
 
 def _agent_label(agent_map: dict[str, dict[str, Any]], agent_id: str, default_name: str) -> str:

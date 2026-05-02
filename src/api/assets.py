@@ -37,7 +37,7 @@ async def extract_asset_metadata(file_path: str) -> dict:
     return metadata
 
 
-@router.post("/projects/{project_id}/assets", response_model=AssetResponse, status_code=status.HTTP_201_CREATED)
+@router.post("/{project_id}/assets", response_model=AssetResponse, status_code=status.HTTP_201_CREATED)
 async def upload_asset(
     project_id: UUID,
     file: UploadFile = File(...),
@@ -81,6 +81,9 @@ async def upload_asset(
         file_size = len(file_content)
 
         # Create asset record
+        if asset_type not in {"image", "video"}:
+            raise HTTPException(status_code=400, detail="asset_type must be image or video")
+
         asset = Asset(
             project_id=project_id_str,
             file_type=asset_type,
@@ -107,7 +110,7 @@ async def upload_asset(
         )
 
 
-@router.get("/projects/{project_id}/assets", response_model=List[AssetResponse])
+@router.get("/{project_id}/assets", response_model=List[AssetResponse])
 async def list_project_assets(
     project_id: UUID,
     skip: int = 0,
@@ -134,13 +137,14 @@ async def list_project_assets(
     return assets
 
 
-@router.get("/assets/{asset_id}", response_model=AssetResponse)
+@router.get("/{project_id}/assets/{asset_id}", response_model=AssetResponse)
 async def get_asset(
+    project_id: UUID,
     asset_id: UUID,
     db: Session = Depends(get_db),
 ):
     """Get asset metadata"""
-    asset = db.query(Asset).filter(Asset.id == str(asset_id)).first()
+    asset = db.query(Asset).filter(Asset.id == str(asset_id), Asset.project_id == str(project_id)).first()
     if not asset:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -149,13 +153,14 @@ async def get_asset(
     return asset
 
 
-@router.get("/assets/{asset_id}/download")
+@router.get("/{project_id}/assets/{asset_id}/download")
 async def download_asset(
+    project_id: UUID,
     asset_id: UUID,
     db: Session = Depends(get_db),
 ):
     """Download asset file"""
-    asset = db.query(Asset).filter(Asset.id == str(asset_id)).first()
+    asset = db.query(Asset).filter(Asset.id == str(asset_id), Asset.project_id == str(project_id)).first()
     if not asset:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -176,14 +181,15 @@ async def download_asset(
     )
 
 
-@router.delete("/assets/{asset_id}", status_code=status.HTTP_204_NO_CONTENT)
+@router.delete("/{project_id}/assets/{asset_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_asset(
+    project_id: UUID,
     asset_id: UUID,
     db: Session = Depends(get_db),
 ):
     """Delete asset"""
     try:
-        asset = db.query(Asset).filter(Asset.id == str(asset_id)).first()
+        asset = db.query(Asset).filter(Asset.id == str(asset_id), Asset.project_id == str(project_id)).first()
         if not asset:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
