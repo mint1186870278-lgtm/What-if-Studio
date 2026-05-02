@@ -272,6 +272,7 @@ async def dispatch_autogen_service(
 
     if service_name in {
         "autogen.discussion",
+        "autogen-discussion",
         "autogen.director",
         "agent-director",
         "director",
@@ -283,14 +284,14 @@ async def dispatch_autogen_service(
             event_queue=event_queue,
         )
 
-    if service_name in {"autogen.sound", "agent-composer", "composer"}:
+    if service_name in {"autogen.sound", "autogen-sound", "agent-composer", "composer"}:
         return {
             "service": service_name,
             "status": "ok",
             "audio_design": f"建议音轨: {style}，围绕'{prompt[:48]}'构建克制、递进的情绪层次。",
         }
 
-    if service_name in {"autogen.edit", "agent-editor", "editor"}:
+    if service_name in {"autogen.edit", "autogen-edit", "agent-editor", "editor"}:
         return {
             "service": service_name,
             "status": "ok",
