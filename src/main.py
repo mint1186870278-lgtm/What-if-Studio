@@ -12,6 +12,7 @@ from fastapi.staticfiles import StaticFiles
 
 from src.config import settings
 from src.db import init_db
+from src.core.anet_gateway import register_anet_services, unregister_anet_services
 
 # Configure logging
 logging.basicConfig(level=settings.log_level)
@@ -27,9 +28,21 @@ async def lifespan(app: FastAPI):
     init_db()
     logger.info("✅ Database initialized")
 
+    # Register services on the ANet P2P mesh (if daemon is running)
+    registered = await register_anet_services()
+    if registered:
+        logger.info("✅ Registered %d ANet services", len(registered))
+    else:
+        logger.info(
+            "ANet daemon not detected — services will fall back to local autogen. "
+            "Install anet CLI (curl -fsSL https://agentnetwork.org.cn/install.sh | sh) "
+            "and run 'anet daemon &' to enable P2P agent mesh."
+        )
+
     yield
 
     # Shutdown
+    await unregister_anet_services()
     logger.info("🛑 Shutting down Video Editing API")
 
 

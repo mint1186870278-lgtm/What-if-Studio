@@ -10,7 +10,7 @@ from sqlalchemy.orm import Session as DBSession
 
 from src.db import get_db
 from src.models import ANetInvocation
-from src.core.anet_gateway import anet_gateway
+from src.core.anet_gateway import call_service as anet_call_service
 from src.core.render_service import render_video_from_session
 
 logger = logging.getLogger(__name__)
@@ -25,11 +25,11 @@ async def list_services():
     ANet registry or service discovery."""
     # Backend-local AutoGen services.
     services = [
-        {"name": "autogen.discussion", "capability": "multi_director_discussion_and_script"},
-        {"name": "autogen.edit", "capability": "propose_editing_plan"},
-        {"name": "autogen.sound", "capability": "compose_sound_design"},
-        {"name": "anet.video_editing", "capability": "render_video_from_session_script_and_assets"},
-        {"name": "video-editing-api", "capability": "legacy_alias_of_anet.video_editing"},
+        {"name": "autogen-discussion", "capability": "multi_director_discussion_and_script"},
+        {"name": "autogen-edit", "capability": "propose_editing_plan"},
+        {"name": "autogen-sound", "capability": "compose_sound_design"},
+        {"name": "anet-video-editing", "capability": "render_video_from_session_script_and_assets"},
+        {"name": "video-editing-api", "capability": "legacy_alias_of_anet-video-editing"},
     ]
     return {"services": services}
 
@@ -85,7 +85,7 @@ async def invoke_agent(req: InvokeRequest = Body(...), db: DBSession = Depends(g
             resp = await _invoke_video_editing_service(payload, db)
         else:
             # Call autogen services through ANet-facing gateway
-            resp = await anet_gateway.call_service(service, payload)
+            resp = await anet_call_service(service, payload)
 
         # Update record
         inv.response = resp if isinstance(resp, dict) else {"result": resp}

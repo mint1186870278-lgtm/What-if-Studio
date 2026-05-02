@@ -1,15 +1,22 @@
 """Compatibility wrapper for legacy imports.
 
-Prefer src.core.anet_gateway.ANetGateway and src.core.anet_gateway.anet_gateway.
+Prefer importing from ``src.core.anet_gateway`` directly.
 """
 
-from src.core.anet_gateway import ANetGateway, anet_gateway
+from src.core.anet_gateway import ANetGateway, call_service
+
+# Backward-compatible aliases
+anet_gateway = call_service
 
 
-class AgentGateway(ANetGateway):
-    async def call_agent(self, service_name, payload):
-        return await self.call_service(service_name, payload)
+class AgentGateway:
+    """Legacy wrapper — delegates to the flat ``call_service`` function."""
+
+    async def call_agent(self, service_name: str, payload: dict) -> dict:
+        return await call_service(service_name, payload)
+
+    async def call_service(self, service_name: str, payload: dict) -> dict:
+        return await call_service(service_name, payload)
 
 
-agent_gateway = anet_gateway
-
+agent_gateway = call_service
