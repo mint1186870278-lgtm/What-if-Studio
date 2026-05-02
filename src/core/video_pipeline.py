@@ -122,8 +122,15 @@ async def _poll_wan_task(request_id: str) -> str:
         raw_status = str(data.get("status") or "running").lower()
         if raw_status in ("succeeded", "completed", "done", "succeed"):
             # Try common video URL field names from SiliconFlow responses
+            # Known format: {"status":"Succeed","results":{"videos":[{"url":"..."}]}}
+            results_obj = data.get("results") or {}
+            results_videos = results_obj.get("videos") if isinstance(results_obj, dict) else []
+            first_video = results_videos[0] if isinstance(results_videos, list) and results_videos else {}
             video_url = (
-                data.get("videoUrl")
+                first_video.get("url")
+                or first_video.get("videoUrl")
+                or first_video.get("video_url")
+                or data.get("videoUrl")
                 or data.get("video_url")
                 or data.get("output")
                 or data.get("result", {}).get("videoUrl")
@@ -138,6 +145,58 @@ async def _poll_wan_task(request_id: str) -> str:
             raise RuntimeError(data.get("error") or data.get("message") or "Unknown error")
         await asyncio.sleep(_DEFAULT_POLL_INTERVAL)
     raise TimeoutError(f"Task {request_id} did not complete within timeout")
+
+
+# ---------------------------------------------------------------------------
+# ffmpeg fallback — generates a real playable MP4 when SiliconFlow is unavailable
+# ---------------------------------------------------------------------------
+
+
+def _generate_ffmpeg_video(prompt: str, script: str, output_path: str) -> str:
+    """Render a playable MP4 with the script text using ffmpeg."""
+    import subprocess as _sp
+    import textwrap as _tw
+    import tempfile
+
+    display = prompt or (script[:300] if script else "意难平剧组")
+    wrapped = _tw.fill(display, width=42)
+
+    tmp = tempfile.NamedTemporaryFile(mode="w", suffix=".txt", delete=False)
+    try:
+        tmp.write(wrapped)
+        tmp.close()
+
+        out = Path(output_path)
+        duration = 20
+
+        _sp.run(
+            [
+                "ffmpeg", "-y",
+                "-f", "lavfi",
+                "-i", f"color=c=#0d1117:s=1280x720:d={duration}:r=24",
+                "-vf", (
+                    f"drawtext=textfile={tmp.name}:"
+                    f"fontsize=28:fontcolor=#c9d1d9:"
+                    f"x=(w-tw)/2:y=(h-th)/2:"
+                    f"fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf:"
+                    f"line_spacing=12,"
+                    f"drawtext=text='意难平剧组':fontsize=14:fontcolor=#58a6ff:"
+                    f"x=20:y=h-36"
+                ),
+                "-c:v", "libx264", "-pix_fmt", "yuv420p",
+                "-preset", "fast", "-crf", "23",
+                str(out),
+            ],
+            check=True, capture_output=True, timeout=60,
+        )
+        logger.info("✅ ffmpeg video saved to %s", output_path)
+        return str(output_path)
+    except Exception:
+        raise
+    finally:
+        _ = Path(tmp.name)
+        if _.exists():
+            _.unlink()
 
 
 # ---------------------------------------------------------------------------
@@ -194,13 +253,16 @@ async def generate_video_from_script(
             "Set SILICONFLOW_API_KEY in .env to enable Wan T2V generation."
         )
 
-    # Fallback: write placeholder so the pipeline completes (not a real mp4,
-    # but prevents 404 on the download endpoint)
-    output.write_bytes(
-        f"Placeholder video for prompt: {prompt}\n".encode("utf-8")
-    )
-    logger.warning("⚠️  Placeholder written to %s", output_path)
-    return str(output_path)
+    # Fallback: use ffmpeg to create a real playable MP4 from the script text
+    try:
+        return _generate_ffmpeg_video(prompt, script, output_path)
+    except Exception as ffmpeg_err:
+        logger.warning("ffmpeg fallback also failed (%s); writing text placeholder", ffmpeg_err)
+        output.write_bytes(
+            f"Placeholder video for prompt: {prompt}\n".encode("utf-8")
+        )
+        logger.warning("⚠️  Text placeholder written to %s", output_path)
+        return str(output_path)
 
 
 async def call_seedance(
