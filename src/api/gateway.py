@@ -2,17 +2,16 @@
 
 import json
 import logging
-from typing import List
-from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, status, Body
+from fastapi import APIRouter, Depends, HTTPException, Body
 from pydantic import BaseModel
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session as DBSession
 
 from src.db import get_db
 from src.models import ANetInvocation
-from src.core.agent_gateway import agent_gateway
+from src.core.anet_gateway import anet_gateway
+from src.core.render_service import render_video_from_session
 
 logger = logging.getLogger(__name__)
 
@@ -20,14 +19,17 @@ router = APIRouter()
 
 
 @router.get("/gateway/services")
+@router.get("/anet/services")
 async def list_services():
     """Return a simple capabilities list. In real deployment this would query the
     ANet registry or service discovery."""
-    # Placeholder: return a small static list
+    # Backend-local AutoGen services.
     services = [
-        {"name": "agent-director", "capability": "generate_directing_advice"},
-        {"name": "agent-composer", "capability": "compose_music"},
-        {"name": "agent-editor", "capability": "propose_editing_plan"},
+        {"name": "autogen.discussion", "capability": "multi_director_discussion_and_script"},
+        {"name": "autogen.edit", "capability": "propose_editing_plan"},
+        {"name": "autogen.sound", "capability": "compose_sound_design"},
+        {"name": "anet.video_editing", "capability": "render_video_from_session_script_and_assets"},
+        {"name": "video-editing-api", "capability": "legacy_alias_of_anet.video_editing"},
     ]
     return {"services": services}
 
@@ -37,7 +39,31 @@ class InvokeRequest(BaseModel):
     payload: dict = {}
 
 
+async def _invoke_video_editing_service(payload: dict, db: DBSession) -> dict:
+    session_id = payload.get("session_id")
+
+    if not session_id:
+        raise HTTPException(status_code=400, detail="session_id is required")
+    asset_ids = payload.get("asset_ids") or []
+    try:
+        render_result = await render_video_from_session(db, session_id=session_id, asset_ids=asset_ids)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    return {
+        "service": "anet.video_editing",
+        "status": "success",
+        "project_id": str(render_result["project_id"]),
+        "session_id": str(render_result["session_id"]),
+        "output_path": str(render_result["output_path"]),
+        "assets": render_result["assets"],
+    }
+
+
 @router.post("/gateway/invoke")
+@router.post("/anet/invoke")
 async def invoke_agent(req: InvokeRequest = Body(...), db: DBSession = Depends(get_db)):
     """Invoke an agent via the AgentGateway and record invocation log."""
     service = req.service
@@ -55,8 +81,11 @@ async def invoke_agent(req: InvokeRequest = Body(...), db: DBSession = Depends(g
         db.commit()
         db.refresh(inv)
 
-        # Call agent
-        resp = await agent_gateway.call_agent(service, payload)
+        if service in {"anet.video_editing", "video-editing-api", "video-render", "seedance.render"}:
+            resp = await _invoke_video_editing_service(payload, db)
+        else:
+            # Call autogen services through ANet-facing gateway
+            resp = await anet_gateway.call_service(service, payload)
 
         # Update record
         inv.response = resp if isinstance(resp, dict) else {"result": resp}

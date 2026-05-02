@@ -2,6 +2,31 @@
 
 Hybrid bootstrap monorepo for the "意难平剧组" product.
 
+## Python Backend Quick Start
+
+The active backend lives in `src/` and is run with `uv`.
+
+Current flow:
+
+- Session discussion uses AutoGen multi-director streaming in `src/agents`.
+- Video jobs read project/session/asset data from the database and call Seedance directly.
+- The public ANet-facing gateway is exposed from `/api/gateway/*`.
+
+1. Sync dependencies:
+  - `uv sync`
+2. Start the API:
+  - `uv run uvicorn src.main:app --reload`
+3. Optional direct checks:
+  - `uv run python scripts/test_endpoints.py`
+  - `uv run python -c "import asyncio; from src.agents import run_debate; print(asyncio.run(run_debate('测试剧情', style='auto')))"`
+
+Default backend URL:
+
+- API: `http://127.0.0.1:8000`
+
+The old `npm run dev:api` section below is legacy documentation from the previous
+Node backend and can be ignored for the current Python backend.
+
 ## Structure
 
 - `apps/web`: Vite + D3 front-end demo.
@@ -54,6 +79,12 @@ If `sourceVideoPath` is provided and valid, API now creates a real source-previe
 
 ## Agent Network gateway
 
+- `GET /api/gateway/services`
+- `POST /api/gateway/invoke`
+- `GET /api/gateway/invocations`
+- `GET /api/gateway/invocations/events`
+- The gateway exposes the video-editing service externally while keeping discussion planning inside AutoGen.
+
 - API now includes a P2P-style service gateway:
   - `GET /api/gateway/services`
   - `GET /api/gateway/capabilities`
@@ -65,57 +96,27 @@ If `sourceVideoPath` is provided and valid, API now creates a real source-previe
   - `video-lab`: `video.createJob`, `video.getJob`
   - `audio-lab`: `soundtrack.suggest`
   - `orchestrator-hub`: `production.plan` (cross-agent invoke demo)
+  - `video-editing-api`: read project/session/assets from DB and call Seedance
 
 ## ANet full integration runbook
 
-### 1) Prepare daemon and Python environment
+### 1) Start backend
 
-1. Install and start daemon:
-   - `anet --version`
-   - `anet daemon`
-   - `anet whoami`
-2. Install Python dependencies:
-   - `cd anet-services`
-   - `pip install -r requirements.txt`
-3. Start agent services (Windows):
-   - `powershell -ExecutionPolicy Bypass -File .\\start_agents.ps1`
-4. Optional helper scripts (Windows):
-   - `powershell -ExecutionPolicy Bypass -File .\\setup_windows.ps1`
-   - `powershell -ExecutionPolicy Bypass -File .\\run_local_demo.ps1`
+1. Activate the virtual environment.
+2. Start the API:
+   - `uvicorn src.main:app --reload`
 
-### 2) Register services to daemon
+### 2) AutoGen discussion module
 
-- `cd anet-services`
-- `python register_agents.py`
-- Optional smoke:
-  - `python test_call.py`
+- The backend uses AutoGen in `src/agents` for multi-director discussion.
+- `/api/sessions/:id/stream` streams every AutoGen message and the final synthesized markdown.
+- `src/agents` does not handle video generation; video jobs remain in the API layer and call Seedance using the project database contents.
 
-Expected: 4 services (`yinanping-composer/editor/director/collector`) are discoverable.
+### 3) Troubleshooting
 
-### 3) Start API and web
-
-1. Back to repo root and set env:
-   - `ANET_BASE=http://127.0.0.1:3998`
-2. Start backend:
-   - `npm run dev:api`
-3. Start frontend:
-   - `npm run dev:web`
-
-When ANet discover/call is healthy:
-- `/api/sessions/:id/discussion/stream` dispatches calls to `director/composer/editor/collector`.
-- API emits invocation events (`calling` / `ok` / `failed`) into `/api/gateway/invocations/events`.
-- Web D3 graph flashes links for each cross-node invocation.
-
-### 4) Troubleshooting
-
-- `discover` returns empty:
-  - Ensure all 4 Python services are alive (`/health` endpoints).
-  - Re-run `python register_agents.py`.
-- API cannot reach daemon:
-  - Check `ANET_BASE` and `curl http://127.0.0.1:3998/api/status`.
-- Invocation stream is degraded:
-  - Verify API is running and browser can reach `/api/gateway/invocations/events`.
-  - ANet failures are auto-fallbacked to local gateway capabilities for demo continuity.
+- If you want to smoke-test the agent layer directly, run:
+  - `.venv\\Scripts\\python -c "import asyncio; from src.agents import run_debate; print(asyncio.run(run_debate('测试剧情', style='auto')))"`
+- Invocation logging is still available at `/api/gateway/invocations` and `/api/gateway/invocations/events`.
 
 ## Distillation and smoke scripts
 

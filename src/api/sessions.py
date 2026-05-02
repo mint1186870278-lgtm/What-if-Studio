@@ -1,6 +1,5 @@
 """Session management API routes with SSE streaming"""
 
-import asyncio
 import json
 import logging
 from typing import AsyncGenerator
@@ -12,7 +11,7 @@ from sqlalchemy.orm import Session as DBSession
 from src.db import get_db
 from src.models import Project, Session, VideoJob
 from src.schemas import SessionCreate, SessionResponse, DiscussionTurn
-from src.core.discussion_engine import discussion_engine
+from src.agents import run_autogen_discussion_stream
 
 logger = logging.getLogger(__name__)
 
@@ -85,36 +84,24 @@ async def generate_discussion_stream(
             yield f"data: {json.dumps({'error': 'Session not found'})}\n\n"
             return
 
-        # Generate timeline
-        turns, script = discussion_engine.generate_timeline(
-            session.prompt,
-            session.style_preference,
-        )
+        turns = []
+        script = ""
+        final = {}
 
-        # Update session with script
+        async for event in run_autogen_discussion_stream(
+            user_request=session.prompt,
+            style=session.style_preference,
+        ):
+            yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
+            if event.get("type") == "turn":
+                turns.append(event)
+            elif event.get("type") == "script":
+                script = str(event.get("script", ""))
+                final = dict(event.get("final", {}))
+
         session.script = script
-        session.discussion_history = [turn.dict() for turn in turns]
+        session.discussion_history = turns
         db.commit()
-
-        # Stream each turn with delay
-        for turn in turns:
-            turn_dict = {
-                "type": "turn",
-                "speaker": turn.speaker,
-                "role": turn.role,
-                "content": turn.content,
-                "stage": turn.stage,
-                "ts": turn.ts,
-            }
-            yield f"data: {json.dumps(turn_dict)}\n\n"
-            await asyncio.sleep(0.5)  # Simulate real-time discussion
-
-        # Send final script
-        script_event = {
-            "type": "script",
-            "script": script,
-        }
-        yield f"data: {json.dumps(script_event)}\n\n"
 
         # Mark session as completed
         session.status = "completed"

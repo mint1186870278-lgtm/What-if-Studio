@@ -4,6 +4,7 @@ from datetime import datetime
 from uuid import uuid4
 import uuid
 from sqlalchemy import Column, String, Integer, DateTime, Text, JSON, ForeignKey, Enum
+from sqlalchemy.orm import relationship
 import enum
 
 from src.db import Base
@@ -21,6 +22,9 @@ class Project(Base):
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     metadata_ = Column(JSON, default=dict, nullable=False)  # Custom fields
 
+    assets = relationship("Asset", back_populates="project", cascade="all, delete-orphan")
+    sessions = relationship("Session", back_populates="project", cascade="all, delete-orphan")
+
 
 class Asset(Base):
     """Project asset (video, audio, image, text)"""
@@ -37,6 +41,8 @@ class Asset(Base):
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
+    project = relationship("Project", back_populates="assets")
+
 
 class Session(Base):
     """Creative session for a project"""
@@ -52,6 +58,9 @@ class Session(Base):
     discussion_history = Column(JSON, default=list, nullable=False)  # List of DiscussionTurn
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    project = relationship("Project", back_populates="sessions")
+    video_jobs = relationship("VideoJob", back_populates="session", cascade="all, delete-orphan")
 
 
 class VideoJob(Base):
@@ -72,6 +81,8 @@ class VideoJob(Base):
     error = Column(Text, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    session = relationship("Session", back_populates="video_jobs")
 
 
 class ANetInvocation(Base):
