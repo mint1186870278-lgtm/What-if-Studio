@@ -26,6 +26,7 @@ export function createNetwork(svgElement, agents, handlers = {}) {
   const activeAgentIds = new Set();
   let activeLeadId = null;
   let focusedZoneKey = null;
+  let idleSpeechEnabled = false;
   let currentAnchor = { x: width * 0.5, y: height * 0.52 };
   let currentTransform = d3.zoomIdentity;
   let roleBuckets = {
@@ -48,11 +49,55 @@ export function createNetwork(svgElement, agents, handlers = {}) {
 
   const viewportLayer = svg.append("g").attr("class", "viewport-layer");
   const studioLayer = viewportLayer.append("g").attr("class", "studio-bg");
-  const sessionLayer = viewportLayer.append("g").attr("class", "session-layer");
+  viewportLayer.append("g").attr("class", "session-layer");
   const linkLayer = viewportLayer.append("g").attr("class", "runtime-links");
   const flashLinkLayer = viewportLayer.append("g").attr("class", "flash-links");
   const nodeLayer = viewportLayer.append("g").attr("class", "node-layer");
   const speechLayer = viewportLayer.append("g").attr("class", "speech-layer");
+  const defs = svg.append("defs");
+  const maskId = `studio_fade_mask_${Math.random().toString(36).slice(2, 9)}`;
+  const gradientId = `studio_fade_gradient_${Math.random().toString(36).slice(2, 9)}`;
+
+  defs
+    .append("radialGradient")
+    .attr("id", gradientId)
+    .attr("cx", "50%")
+    .attr("cy", "50%")
+    .attr("r", "68%")
+    .attr("fx", "50%")
+    .attr("fy", "50%")
+    .call((g) => {
+      g.append("stop").attr("offset", "0%").attr("stop-color", "#ffffff").attr("stop-opacity", 1);
+      g.append("stop").attr("offset", "62%").attr("stop-color", "#ffffff").attr("stop-opacity", 1);
+      g.append("stop").attr("offset", "86%").attr("stop-color", "#ffffff").attr("stop-opacity", 0.45);
+      g.append("stop").attr("offset", "100%").attr("stop-color", "#000000").attr("stop-opacity", 0);
+    });
+
+  const fadeMask = defs.append("mask").attr("id", maskId).attr("maskUnits", "userSpaceOnUse");
+  fadeMask
+    .append("rect")
+    .attr("x", 0)
+    .attr("y", 0)
+    .attr("width", width)
+    .attr("height", height)
+    .attr("fill", `url(#${gradientId})`);
+
+  const backgroundScale = 1.025;
+  const backgroundWidth = width * backgroundScale;
+  const backgroundHeight = height * backgroundScale;
+  const backgroundOffsetX = (width - backgroundWidth) * 0.5;
+  const backgroundOffsetY = (height - backgroundHeight) * 0.5;
+
+  studioLayer
+    .append("image")
+    .attr("href", "/background/studio_floorplan_v15.svg")
+    .attr("x", backgroundOffsetX)
+    .attr("y", backgroundOffsetY)
+    .attr("width", backgroundWidth)
+    .attr("height", backgroundHeight)
+    .attr("preserveAspectRatio", "xMidYMid slice")
+    .attr("mask", `url(#${maskId})`)
+    .style("pointer-events", "none");
 
   const studioZones = [
     { key: "archive", label: "ARCHIVE", x: width * 0.06, y: height * 0.08, w: width * 0.24, h: height * 0.22 },
@@ -67,6 +112,21 @@ export function createNetwork(svgElement, agents, handlers = {}) {
       { x: zone.x + zone.w * 0.5, y: zone.y + zone.h * 0.5 }
     ])
   );
+
+  function resolveZoneByViewportCenter(transform) {
+    const scale = Number(transform?.k || 1);
+    if (!Number.isFinite(scale) || scale <= 0) return null;
+    const translateX = Number(transform?.x || 0);
+    const translateY = Number(transform?.y || 0);
+    const centerX = (width * 0.5 - translateX) / scale;
+    const centerY = (height * 0.5 - translateY) / scale;
+    const matched = studioZones.find((zone) => {
+      const withinX = centerX >= zone.x && centerX <= zone.x + zone.w;
+      const withinY = centerY >= zone.y && centerY <= zone.y + zone.h;
+      return withinX && withinY;
+    });
+    return matched?.key || null;
+  }
 
   const studioZoneSel = studioLayer
     .selectAll("g")
@@ -98,20 +158,6 @@ export function createNetwork(svgElement, agents, handlers = {}) {
       zoomToZone(zone.key);
     });
 
-  studioZoneSel
-    .append("text")
-    .attr("x", (d) => d.x + 12)
-    .attr("y", (d) => d.y + 20)
-    .text((d) => d.label);
-
-  const zone = sessionLayer.append("circle")
-    .attr("cx", width * 0.5)
-    .attr("cy", height * 0.52)
-    .attr("r", 155)
-    .attr("fill", "rgba(201, 168, 76, 0.16)")
-    .attr("stroke", "rgba(201, 168, 76, 0.45)")
-    .attr("opacity", 0);
-
   const nodes = agents.map((item) => ({
     ...item,
     homeZone: item.homeZone || (item.type === "crew" ? "archive" : "directors"),
@@ -125,7 +171,8 @@ export function createNetwork(svgElement, agents, handlers = {}) {
     .force("charge", d3.forceManyBody().strength(-42))
     .force("collision", d3.forceCollide().radius(26))
     .force("x", d3.forceX((d) => getTargetForNode(d).x).strength((d) => getTargetStrength(d)))
-    .force("y", d3.forceY((d) => getTargetForNode(d).y).strength((d) => getTargetStrength(d)));
+    .force("y", d3.forceY((d) => getTargetForNode(d).y).strength((d) => getTargetStrength(d)))
+    .force("bezierGather", createBezierGatherForce());
 
   const node = nodeLayer
     .selectAll("g")
@@ -240,7 +287,8 @@ export function createNetwork(svgElement, agents, handlers = {}) {
     .on("zoom", (event) => {
       currentTransform = event.transform;
       viewportLayer.attr("transform", currentTransform.toString());
-      if (onZoneFocusChange) onZoneFocusChange(focusedZoneKey, currentTransform.k);
+      const effectiveZoneKey = resolveZoneByViewportCenter(currentTransform);
+      if (onZoneFocusChange) onZoneFocusChange(effectiveZoneKey, currentTransform.k);
     });
 
   svg.call(zoomBehavior).on("wheel", (event) => {
@@ -335,6 +383,9 @@ export function createNetwork(svgElement, agents, handlers = {}) {
 
   function getTargetStrength(node) {
     if (currentPhase === "idle") return 0.08;
+    if ((currentPhase === "forming" || currentPhase === "discuss") && (node.type === "director" || node.type === "guardian")) {
+      return 0.2;
+    }
     if (!activeAgentIds.size) return 0.16;
     if (activeAgentIds.has(node.agentId)) return 0.24;
     return 0.06;
@@ -373,6 +424,20 @@ export function createNetwork(svgElement, agents, handlers = {}) {
     }
 
     if (currentPhase === "discuss" || currentPhase === "forming") {
+      const isDirectorOrGuardian = node.type === "director" || node.type === "guardian";
+      if (isDirectorOrGuardian) {
+        const isLate = roleBuckets.lateJoiners.has(node.agentId);
+        const inParticipants = roleBuckets.participants.has(node.agentId);
+        const isActive = activeAgentIds.has(node.agentId);
+        const shouldJoinMainStage = inParticipants || isActive;
+        if (!shouldJoinMainStage) {
+          return withOrbit(homeZoneCenter(node), node.agentId, 24);
+        }
+        if (isLate && isLateJoinPending(node.agentId)) {
+          return withOrbit(zoneByKey.mainStage, node.agentId, 120);
+        }
+        return withOrbit(zoneByKey.mainStage, node.agentId, node.agentId === activeLeadId ? 18 : 62);
+      }
       if (roleBuckets.lateJoiners.has(node.agentId) && isLateJoinPending(node.agentId)) {
         return withOrbit(homeZoneCenter(node), node.agentId, 24);
       }
@@ -417,33 +482,12 @@ export function createNetwork(svgElement, agents, handlers = {}) {
   }
 
   function repaintPhase() {
-    const activeMain = currentPhase !== "idle";
-    const now = Date.now();
-    zone
-      .transition()
-      .duration(300)
-      .attr("opacity", activeMain ? 0.9 : 0.15)
-      .attr("r", activeMain ? 172 : 155);
-
     studioZoneSel
       .select("rect")
       .transition()
       .duration(260)
-      .attr("fill", (d) => {
-        const pulseUntil = zonePulseUntil.get(d.key) || 0;
-        if (now < pulseUntil) return "rgba(201, 168, 76, 0.18)";
-        if (d.key === "mainStage" && activeMain) return "rgba(201, 168, 76, 0.15)";
-        if ((d.key === "edit" || d.key === "sound") && (currentPhase === "edit" || currentPhase === "render")) {
-          return "rgba(201, 168, 76, 0.12)";
-        }
-        if (d.key === "archive" && currentPhase === "collect") return "rgba(201, 168, 76, 0.1)";
-        return "rgba(255, 255, 255, 0.02)";
-      })
-      .attr("stroke", (d) => {
-        if (d.key === focusedZoneKey) return "rgba(201, 168, 76, 0.7)";
-        if (d.key === "mainStage" && activeMain) return "rgba(201, 168, 76, 0.5)";
-        return "rgba(255, 255, 255, 0.16)";
-      });
+      .attr("fill", "transparent")
+      .attr("stroke", "transparent");
   }
 
   function zoomToZone(zoneKey, scale = 1.9) {
@@ -479,6 +523,9 @@ export function createNetwork(svgElement, agents, handlers = {}) {
       const delay = 500 + Math.floor(Math.random() * 7500);
       lateJoinReadyAt.set(id, Date.now() + delay);
     }
+    if (currentPhase === "forming" || currentPhase === "discuss") {
+      runGatherMotionForCurrentPhase();
+    }
     simulation.alpha(0.7).restart();
   }
 
@@ -488,6 +535,7 @@ export function createNetwork(svgElement, agents, handlers = {}) {
     scatterAssignment.clear();
     scatterReadyAt.clear();
     zonePulseUntil.set("mainStage", Date.now() + 1500);
+    runGatherMotionForCurrentPhase();
     repaintPhase();
     simulation
       .alpha(0.9)
@@ -505,6 +553,7 @@ export function createNetwork(svgElement, agents, handlers = {}) {
     };
     scatterAssignment.clear();
     scatterReadyAt.clear();
+    clearAllMotions();
     repaintPhase();
     simulation
       .alpha(0.8)
@@ -515,6 +564,9 @@ export function createNetwork(svgElement, agents, handlers = {}) {
     if (!roleBuckets.lateJoiners.has(agentId)) return;
     lateJoinReadyAt.set(agentId, Date.now() - 1);
     activeAgentIds.add(agentId);
+    if (currentPhase === "forming" || currentPhase === "discuss") {
+      runGatherMotionForCurrentPhase();
+    }
     simulation.alpha(0.66).restart();
   }
 
@@ -528,13 +580,13 @@ export function createNetwork(svgElement, agents, handlers = {}) {
   function scatterAfterWrapup() {
     currentPhase = "scatter";
     currentAnchor = zoneByKey.mainStage;
-    const destinations = ["edit", "sound", "directors", "mainStage"];
     for (const node of nodes) {
-      const preference = node.scatterPreference || destinations[hash(node.agentId) % destinations.length];
-      scatterAssignment.set(node.agentId, preference);
-      const delay = Math.floor(Math.random() * 6000);
+      const destination = resolveScatterDestination(node, activeAgentIds.has(node.agentId));
+      scatterAssignment.set(node.agentId, destination);
+      const delay = 500 + Math.floor(Math.random() * 7500);
       scatterReadyAt.set(node.agentId, Date.now() + delay);
     }
+    runScatterMotion();
     pulseZone("edit", 780);
     pulseZone("sound", 900);
     simulation.alpha(0.92).restart();
@@ -554,19 +606,36 @@ export function createNetwork(svgElement, agents, handlers = {}) {
     if (currentPhase === "collect") pulseZone("archive");
     if (currentPhase === "edit") pulseZone("edit");
     if (currentPhase === "render") pulseZone("sound");
+    if (currentPhase === "forming" || currentPhase === "discuss") {
+      runGatherMotionForCurrentPhase();
+    } else if (currentPhase === "scatter") {
+      runScatterMotion();
+    } else if (currentPhase === "idle") {
+      clearAllMotions();
+    }
     repaintPhase();
     simulation.alpha(0.58).restart();
   }
 
   function setActiveAgents(agentIds, leadId = null) {
+    const prevSnapshot = [...activeAgentIds].sort().join("|");
     activeAgentIds.clear();
     for (const id of agentIds || []) activeAgentIds.add(id);
+    const nextSnapshot = [...activeAgentIds].sort().join("|");
+    const changed = prevSnapshot !== nextSnapshot || (leadId || null) !== activeLeadId;
     activeLeadId = leadId || null;
     repaintNodeStates();
     repaintRuntimeLinks();
+    if (changed) {
+      if (currentPhase === "forming" || currentPhase === "discuss") {
+        runGatherMotionForCurrentPhase();
+      }
+      simulation.alpha(Math.max(simulation.alpha(), 0.72)).restart();
+    }
   }
 
   function showAgentSpeech(agentId, content, options = {}) {
+    if (!idleSpeechEnabled && !options.force) return;
     const bubble = speechByAgent.get(agentId);
     if (!bubble) return;
     const duration = Number(options.duration || 2800);
@@ -596,6 +665,13 @@ export function createNetwork(svgElement, agents, handlers = {}) {
     for (const bubble of speechByAgent.values()) {
       bubble.interrupt();
       bubble.attr("opacity", 0).attr("display", "none");
+    }
+  }
+
+  function setIdleSpeechEnabled(enabled) {
+    idleSpeechEnabled = Boolean(enabled);
+    if (!idleSpeechEnabled) {
+      clearAllSpeech();
     }
   }
 
@@ -649,6 +725,175 @@ export function createNetwork(svgElement, agents, handlers = {}) {
       .on("end", () => path.remove());
   }
 
+  function runGatherMotionForCurrentPhase() {
+    const anchor = zoneByKey.mainStage;
+    for (const nodeItem of nodes) {
+      const isDirectorOrGuardian = nodeItem.type === "director" || nodeItem.type === "guardian";
+      const inParticipants = roleBuckets.participants.has(nodeItem.agentId);
+      const isActive = activeAgentIds.has(nodeItem.agentId);
+      const shouldGather = isDirectorOrGuardian ? (inParticipants || isActive) : isActive;
+      if (!shouldGather) continue;
+      const target = getTargetForNode(nodeItem);
+      startGatherMotion(nodeItem, target, anchor);
+    }
+  }
+
+  function runScatterMotion() {
+    const anchor = zoneByKey.mainStage;
+    for (const nodeItem of nodes) {
+      const target = getScatterTarget(nodeItem);
+      startGatherMotion(nodeItem, target, anchor);
+    }
+  }
+
+  function clearGatherMotion(nodeItem) {
+    nodeItem.motion = null;
+    nodeItem.fx = null;
+    nodeItem.fy = null;
+  }
+
+  function clearAllMotions() {
+    for (const nodeItem of nodes) {
+      clearGatherMotion(nodeItem);
+    }
+  }
+
+  function startGatherMotion(nodeItem, target, anchor) {
+    if (!target || !Number.isFinite(target.x) || !Number.isFinite(target.y)) return;
+    const from = {
+      x: Number.isFinite(nodeItem.x) ? nodeItem.x : nodeItem.home.x * width,
+      y: Number.isFinite(nodeItem.y) ? nodeItem.y : nodeItem.home.y * height
+    };
+    const curve = buildGatherCurve(from, target, anchor || zoneByKey.mainStage, nodeItem.agentId);
+    const pauseEnabled = Math.random() < 0.36;
+    const pauseAt = pauseEnabled ? 0.35 + Math.random() * 0.37 : -1;
+    const pauseFor = pauseEnabled ? 160 + Math.floor(Math.random() * 260) : 0;
+    nodeItem.motion = {
+      startedAt: performance.now(),
+      duration: gatherDuration(from, target),
+      curve,
+      pauseAt,
+      pauseFor,
+      pausedAt: 0
+    };
+  }
+
+  function createBezierGatherForce() {
+    let motionNodes = [];
+    function force() {
+      const now = performance.now();
+      for (const nodeItem of motionNodes) {
+        if (!nodeItem.motion) continue;
+        const pausedElapsed = nodeItem.motion.pausedAt
+          ? now - nodeItem.motion.pausedAt
+          : 0;
+        if (nodeItem.motion.pausedAt && pausedElapsed < nodeItem.motion.pauseFor) {
+          continue;
+        }
+        if (nodeItem.motion.pausedAt && pausedElapsed >= nodeItem.motion.pauseFor) {
+          nodeItem.motion.startedAt += pausedElapsed;
+          nodeItem.motion.pausedAt = 0;
+        }
+        const t = clamp((now - nodeItem.motion.startedAt) / nodeItem.motion.duration, 0, 1);
+        if (
+          nodeItem.motion.pauseAt > 0 &&
+          !nodeItem.motion.pausedAt &&
+          t >= nodeItem.motion.pauseAt &&
+          t < 0.95
+        ) {
+          nodeItem.motion.pausedAt = now;
+          continue;
+        }
+        const eased = easeInOutCubic(t);
+        const point = cubicBezierPoint(nodeItem.motion.curve, eased);
+        nodeItem.fx = point.x;
+        nodeItem.fy = point.y;
+        nodeItem.x = point.x;
+        nodeItem.y = point.y;
+        if (t >= 1) {
+          clearGatherMotion(nodeItem);
+        }
+      }
+    }
+    force.initialize = (nextNodes) => {
+      motionNodes = nextNodes;
+    };
+    return force;
+  }
+
+  function buildGatherCurve(start, end, anchor, seedText) {
+    const dx = end.x - start.x;
+    const dy = end.y - start.y;
+    const distance = Math.hypot(dx, dy) || 1;
+    const normal = { x: -dy / distance, y: dx / distance };
+    const bendDirection = hash(seedText) % 2 === 0 ? 1 : -1;
+    const bend = clamp(distance * 0.22, 48, 140) * bendDirection;
+    return {
+      p0: start,
+      p1: {
+        x: start.x + dx * 0.24 + normal.x * bend,
+        y: start.y + dy * 0.18 + normal.y * bend
+      },
+      p2: {
+        x: anchor.x + (end.x - anchor.x) * 0.42 - normal.x * bend * 0.35,
+        y: anchor.y + (end.y - anchor.y) * 0.42 - normal.y * bend * 0.35
+      },
+      p3: end
+    };
+  }
+
+  function cubicBezierPoint(curve, t) {
+    const mt = 1 - t;
+    const mt2 = mt * mt;
+    const t2 = t * t;
+    const a = mt2 * mt;
+    const b = 3 * mt2 * t;
+    const c = 3 * mt * t2;
+    const d = t * t2;
+    return {
+      x: a * curve.p0.x + b * curve.p1.x + c * curve.p2.x + d * curve.p3.x,
+      y: a * curve.p0.y + b * curve.p1.y + c * curve.p2.y + d * curve.p3.y
+    };
+  }
+
+  function gatherDuration(start, target) {
+    const distance = Math.hypot(target.x - start.x, target.y - start.y);
+    return clamp(900 + distance * 2.1, 1100, 2600);
+  }
+
+  function easeInOutCubic(t) {
+    return t < 0.5 ? 4 * t * t * t : 1 - ((-2 * t + 2) ** 3) / 2;
+  }
+
+  function resolveScatterDestination(nodeItem, wasActive) {
+    if (nodeItem.type === "crew") {
+      return nodeItem.scatterPreference || "archive";
+    }
+
+    const personaScatter = {
+      "agent-yates": { deep: "sound", casual: "sound" },
+      "agent-jackson": { deep: "sound", casual: "sound" },
+      "agent-curtis": { deep: "sound", casual: "sound" },
+      "agent-spielberg": { deep: "sound", casual: "sound" },
+      "agent-cuaron": { deep: "edit", casual: "edit" },
+      "agent-burton": { deep: "edit", casual: "edit" },
+      "agent-columbus": { deep: "edit", casual: "edit" },
+      "agent-newell": { deep: "edit", casual: "edit" },
+      "agent-rowling": { deep: "directors", casual: "directors" },
+      "agent-tolkien": { deep: "directors", casual: "directors" }
+    };
+    const profile = personaScatter[nodeItem.agentId];
+    if (!profile) return nodeItem.scatterPreference || "directors";
+
+    if (wasActive) return profile.deep;
+    if (Math.random() < 0.68) return profile.casual;
+    return "directors";
+  }
+
+  function clamp(value, min, max) {
+    return Math.min(max, Math.max(min, value));
+  }
+
   repaintPhase();
 
   return {
@@ -665,6 +910,7 @@ export function createNetwork(svgElement, agents, handlers = {}) {
     resetCamera,
     flashLink,
     showAgentSpeech,
-    clearAllSpeech
+    clearAllSpeech,
+    setIdleSpeechEnabled
   };
 }

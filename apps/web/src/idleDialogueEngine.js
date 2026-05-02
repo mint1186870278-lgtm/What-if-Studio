@@ -11,8 +11,8 @@ const EXECUTION_GUARD_WORDS = [
   "渲染"
 ];
 
-const DEFAULT_NEXT_DELAY_RANGE = [7000, 12000];
-const DEFAULT_REPLY_DELAY_RANGE = [900, 1700];
+const DEFAULT_NEXT_DELAY_RANGE = [11000, 18000];
+const DEFAULT_REPLY_DELAY_RANGE = [2800, 4500];
 
 function randomInt(min, max) {
   const start = Math.ceil(min);

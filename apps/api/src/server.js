@@ -1,5 +1,6 @@
 import cors from "cors";
 import express from "express";
+import fs from "node:fs/promises";
 import path from "node:path";
 import { parseCreativeSession } from "@yinanping/contracts";
 import { getAgents } from "./agentCatalog.js";
@@ -26,6 +27,8 @@ const corsOrigin = String(process.env.CORS_ORIGIN || "").trim();
 const anetBase = String(process.env.ANET_BASE || "http://127.0.0.1:3998").replace(/\/+$/, "");
 
 let sessions = new Map();
+const uploadedVideoFiles = new Map();
+const UPLOAD_ROOT = path.resolve(process.cwd(), "tmp-uploads");
 
 app.use(cors({ origin: corsOrigin || true }));
 app.use(express.json());
@@ -61,6 +64,12 @@ function readGatewayToken(req) {
   const bodyToken = String(req.body?.token || "").trim();
   if (bodyToken) return bodyToken;
   return getGatewayToken();
+}
+
+function sanitizeUploadName(rawName) {
+  const normalized = String(rawName || "").trim() || "upload.mp4";
+  const safe = normalized.replace(/[<>:"/\\|?*\x00-\x1f]/g, "_");
+  return path.basename(safe);
 }
 
 async function anetJsonFetch(url, options = {}) {
@@ -313,6 +322,42 @@ app.post("/api/sessions", (req, res) => {
   }
 });
 
+app.post("/api/uploads", express.raw({ type: () => true, limit: "800mb" }), async (req, res) => {
+  try {
+    const body = req.body;
+    const bytes = Buffer.isBuffer(body) ? body : null;
+    if (!bytes || !bytes.length) {
+      sendError(res, req, 400, "UPLOAD_EMPTY", "upload body is empty");
+      return;
+    }
+    const rawNameHeader = String(req.headers["x-file-name"] || "");
+    const decodedName = rawNameHeader ? decodeURIComponent(rawNameHeader) : "upload.mp4";
+    const originalName = sanitizeUploadName(decodedName);
+    const ext = path.extname(originalName) || ".mp4";
+    const uploadId = `upload-${Math.random().toString(36).slice(2, 10)}`;
+    await fs.mkdir(UPLOAD_ROOT, { recursive: true });
+    const storedPath = path.join(UPLOAD_ROOT, `${uploadId}${ext.toLowerCase()}`);
+    await fs.writeFile(storedPath, bytes);
+    uploadedVideoFiles.set(uploadId, {
+      uploadId,
+      path: storedPath,
+      originalName,
+      bytes: bytes.length,
+      mimeType: String(req.headers["content-type"] || "application/octet-stream"),
+      createdAt: Date.now()
+    });
+    res.status(201).json({
+      upload: {
+        uploadId,
+        originalName,
+        size: bytes.length
+      }
+    });
+  } catch (error) {
+    sendError(res, req, 400, "UPLOAD_FAILED", error.message);
+  }
+});
+
 app.post("/api/sessions/:id/discussion/stream", async (req, res) => {
   const session = sessions.get(req.params.id);
   if (!session) {
@@ -388,13 +433,23 @@ app.post("/api/sessions/:id/discussion/stream", async (req, res) => {
 });
 
 app.post("/api/video-jobs", async (req, res) => {
-  const { sessionId, sourceVideoPath = "" } = req.body || {};
+  const { sessionId, sourceVideoPath = "", sourceVideoUploadId = "" } = req.body || {};
   const session = sessions.get(sessionId);
   if (!session) {
     sendError(res, req, 404, "SESSION_NOT_FOUND", "session not found");
     return;
   }
-  session.sourceVideoPath = String(sourceVideoPath || "");
+  const uploadId = String(sourceVideoUploadId || "").trim();
+  if (uploadId) {
+    const upload = uploadedVideoFiles.get(uploadId);
+    if (!upload) {
+      sendError(res, req, 404, "UPLOAD_NOT_FOUND", "upload not found");
+      return;
+    }
+    session.sourceVideoPath = upload.path;
+  } else {
+    session.sourceVideoPath = String(sourceVideoPath || "");
+  }
   persistSessions("session_video_path_updated");
   let job;
   try {

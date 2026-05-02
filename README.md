@@ -29,12 +29,17 @@ Defaults:
 Copy `.env.example` at repo root and `apps/web/.env.example` as needed.
 
 - `PORT`: API port (default `3567`)
-- `CORS_ORIGIN`: allowed web origin (default `*` when empty)
+- `CORS_ORIGIN`: allowed web origin (set explicitly in non-demo environments)
 - `SESSION_STORE_PATH`: persisted session store path
 - `IOPHO_SCRIPT_PATH`: optional storyboard script path
 - `DISCUSSION_ENGINE_MODE`: `template` (default) or `distilled`
 - `DEMO_CLIP_SECONDS`: output mp4 clip length for demo render
-- `VITE_API_BASE`: web-side API base URL (optional, defaults to current host + `:3567`)
+- `VITE_API_BASE`: optional web-side API origin (e.g. `http://localhost:3567`); leave empty to use same-origin `/api` (Vite dev proxy / production reverse proxy)
+
+Local dev defaults:
+
+- `npm run dev:web` proxies `/api/*` to `http://localhost:3567`
+- Set `VITE_API_BASE` only when web and API are intentionally cross-origin
 
 ## Optional iopho integration
 
@@ -51,6 +56,7 @@ If `sourceVideoPath` is provided and valid, API now creates a real source-previe
 - API `render` stage attempts a real `ffmpeg` export to `tmp-artifacts/<jobId>/output.mp4`.
 - If `ffmpeg` fails but source file is readable, API falls back to source-copy mp4 for demo continuity.
 - Artifacts are exposed via `GET /api/artifacts/...`, and web result panel can play returned `publicUrl`.
+- Web now supports browser file upload (`POST /api/uploads`) and then binds uploaded media to `/api/video-jobs` via `sourceVideoUploadId`.
 
 ## Agent Network gateway
 
