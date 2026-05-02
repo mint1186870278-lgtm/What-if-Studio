@@ -3,6 +3,7 @@
 import os
 from pathlib import Path
 from pydantic_settings import BaseSettings
+from pydantic import field_validator
 
 
 class Settings(BaseSettings):
@@ -12,7 +13,7 @@ class Settings(BaseSettings):
     database_url: str = os.getenv("DATABASE_URL", "sqlite:///./whatif.db")
 
     # API Configuration
-    debug: bool = os.getenv("DEBUG", "true").lower() == "true"
+    debug: bool = True
     log_level: str = os.getenv("LOG_LEVEL", "INFO")
 
     # Storage
@@ -40,6 +41,18 @@ class Settings(BaseSettings):
     class Config:
         env_file = ".env"
         env_file_encoding = "utf-8"
+
+    @field_validator("debug", mode="before")
+    @classmethod
+    def normalize_debug(cls, v):
+        if isinstance(v, bool):
+            return v
+        raw = str(v or "").strip().lower()
+        if raw in {"1", "true", "yes", "on", "dev", "debug"}:
+            return True
+        if raw in {"0", "false", "no", "off", "release", "prod", "production"}:
+            return False
+        return True
 
     def ensure_storage_paths(self) -> None:
         """Create storage directories if they don't exist"""

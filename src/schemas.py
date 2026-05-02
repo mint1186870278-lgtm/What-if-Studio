@@ -12,6 +12,8 @@ class ProjectCreate(BaseModel):
 
     name: str = Field(..., min_length=1, max_length=255)
     description: Optional[str] = None
+    prompt: Optional[str] = None
+    style_preference: Optional[str] = "auto"
 
 
 class ProjectUpdate(BaseModel):
@@ -19,6 +21,8 @@ class ProjectUpdate(BaseModel):
 
     name: Optional[str] = None
     description: Optional[str] = None
+    prompt: Optional[str] = None
+    style_preference: Optional[str] = None
 
 
 class ProjectResponse(BaseModel):
@@ -27,6 +31,12 @@ class ProjectResponse(BaseModel):
     id: UUID
     name: str
     description: Optional[str]
+    prompt: Optional[str]
+    style_preference: str
+    script: Optional[str]
+    discussion_history: List[Any]
+    discussion_status: str
+    last_opened_at: Optional[datetime]
     created_at: datetime
     updated_at: datetime
     metadata_: dict

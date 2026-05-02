@@ -77,7 +77,7 @@ async def invoke_agent(req: InvokeRequest = Body(...), db: DBSession = Depends(g
         db.commit()
         db.refresh(inv)
 
-        if service in {"anet.video_editing", "video-editing-api", "video-render", "seedance.render"}:
+        if service in {"anet.video_editing", "whatif-studio", "video-render", "seedance.render"}:
             resp = await _invoke_video_editing_service(payload, db)
         else:
             # Call autogen services through ANet-facing gateway

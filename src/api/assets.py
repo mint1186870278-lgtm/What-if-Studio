@@ -45,8 +45,9 @@ async def upload_asset(
     db: Session = Depends(get_db),
 ):
     """Upload asset to project"""
+    project_id_str = str(project_id)
     # Verify project exists
-    project = db.query(Project).filter(Project.id == project_id).first()
+    project = db.query(Project).filter(Project.id == project_id_str).first()
     if not project:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -55,7 +56,7 @@ async def upload_asset(
 
     try:
         # Create project asset directory
-        asset_dir = settings.storage_projects_path / str(project_id) / "assets"
+        asset_dir = settings.storage_projects_path / project_id_str / "assets"
         asset_dir.mkdir(parents=True, exist_ok=True)
 
         # Save file
@@ -81,7 +82,7 @@ async def upload_asset(
 
         # Create asset record
         asset = Asset(
-            project_id=project_id,
+            project_id=project_id_str,
             file_type=asset_type,
             file_name=file_path.name,
             file_path=str(file_path.relative_to(settings.storage_projects_path)),
@@ -114,8 +115,9 @@ async def list_project_assets(
     db: Session = Depends(get_db),
 ):
     """List all assets in a project"""
+    project_id_str = str(project_id)
     # Verify project exists
-    project = db.query(Project).filter(Project.id == project_id).first()
+    project = db.query(Project).filter(Project.id == project_id_str).first()
     if not project:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -124,7 +126,7 @@ async def list_project_assets(
 
     assets = (
         db.query(Asset)
-        .filter(Asset.project_id == project_id)
+        .filter(Asset.project_id == project_id_str)
         .offset(skip)
         .limit(limit)
         .all()
@@ -138,7 +140,7 @@ async def get_asset(
     db: Session = Depends(get_db),
 ):
     """Get asset metadata"""
-    asset = db.query(Asset).filter(Asset.id == asset_id).first()
+    asset = db.query(Asset).filter(Asset.id == str(asset_id)).first()
     if not asset:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -153,7 +155,7 @@ async def download_asset(
     db: Session = Depends(get_db),
 ):
     """Download asset file"""
-    asset = db.query(Asset).filter(Asset.id == asset_id).first()
+    asset = db.query(Asset).filter(Asset.id == str(asset_id)).first()
     if not asset:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -181,7 +183,7 @@ async def delete_asset(
 ):
     """Delete asset"""
     try:
-        asset = db.query(Asset).filter(Asset.id == asset_id).first()
+        asset = db.query(Asset).filter(Asset.id == str(asset_id)).first()
         if not asset:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
