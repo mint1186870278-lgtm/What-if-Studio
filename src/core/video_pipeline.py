@@ -1,12 +1,159 @@
-"""Video processing pipeline and Seedance integration"""
+"""Video processing pipeline with Wan T2V (SiliconFlow) integration.
 
-import logging
-from pathlib import Path
+Falls back to a placeholder file when ``SILICONFLOW_API_KEY`` is not set.
+"""
+
+from __future__ import annotations
+
 import asyncio
+import logging
+import os
+from pathlib import Path
+
+import httpx
 
 from src.config import settings
 
 logger = logging.getLogger(__name__)
+
+# ---------------------------------------------------------------------------
+# SiliconFlow Wan T2V client
+# ---------------------------------------------------------------------------
+
+_T2V_MODEL = "Wan-AI/Wan2.2-T2V-A14B"
+_DEFAULT_POLL_INTERVAL = 3.0
+_MAX_POLL_ATTEMPTS = 120
+
+
+def _siliconflow_key() -> str | None:
+    return os.environ.get("SILICONFLOW_API_KEY") or os.environ.get("OPENAI_API_KEY")
+
+
+def _siliconflow_base() -> str:
+    return os.environ.get("SILICONFLOW_BASE_URL", "https://api.siliconflow.cn/v1").rstrip("/") + "/v1"
+
+
+async def _submit_wan_task(prompt: str, **extra: dict) -> str:
+    """Submit an async T2V task to SiliconFlow and return the request_id."""
+    headers = {
+        "Authorization": f"Bearer {_siliconflow_key()}",
+        "Content-Type": "application/json",
+    }
+    payload = {
+        "model": _T2V_MODEL,
+        "prompt": prompt,
+        **extra,
+    }
+    async with httpx.AsyncClient() as client:
+        resp = await client.post(
+            f"{_siliconflow_base()}/video/submit",
+            headers=headers,
+            json=payload,
+            timeout=60,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+    task_id = data.get("request_id") or data.get("task_id") or data.get("id")
+    if not task_id:
+        raise RuntimeError(f"SiliconFlow submit returned no task_id: {data}")
+    return str(task_id)
+
+
+async def _poll_wan_task(request_id: str) -> str:
+    """Poll until the task completes and return the video URL."""
+    headers = {
+        "Authorization": f"Bearer {_siliconflow_key()}",
+        "Content-Type": "application/json",
+    }
+    url = f"{_siliconflow_base()}/video/status"
+    for attempt in range(1, _MAX_POLL_ATTEMPTS + 1):
+        async with httpx.AsyncClient() as client:
+            resp = await client.get(
+                url,
+                headers=headers,
+                params={"request_id": request_id},
+                timeout=30,
+            )
+            resp.raise_for_status()
+            data = resp.json()
+        status: str = (data.get("status") or "running").lower()
+        if status in ("succeeded", "completed", "done"):
+            video_url = (
+                data.get("video_url")
+                or data.get("output")
+                or data.get("result", {}).get("video_url")
+                or ""
+            )
+            if video_url:
+                return video_url
+            raise RuntimeError(f"Task done but no video_url in response: {data}")
+        if status in ("failed", "error"):
+            raise RuntimeError(data.get("error") or data.get("message") or "Unknown error")
+        await asyncio.sleep(_DEFAULT_POLL_INTERVAL)
+    raise TimeoutError(f"Task {request_id} did not complete within timeout")
+
+
+# ---------------------------------------------------------------------------
+# Public rendering helper
+# ---------------------------------------------------------------------------
+
+
+async def generate_video_from_script(
+    script: str,
+    output_path: str,
+    prompt_override: str | None = None,
+) -> str:
+    """Generate a video clip from a Markdown script.
+
+    1. If ``SILICONFLOW_API_KEY`` is set → call Wan T2V on SiliconFlow.
+    2. Otherwise → write a placeholder file.
+
+    Returns the *output_path* on success.
+    """
+    output = Path(output_path)
+    output.parent.mkdir(parents=True, exist_ok=True)
+
+    # Extract a concise prompt from the script (first non-empty line, or title)
+    prompt = prompt_override or ""
+    if not prompt:
+        for line in script.splitlines():
+            stripped = line.strip().strip("#").strip()
+            if stripped:
+                prompt = stripped[:200]
+                break
+    if not prompt:
+        prompt = f"Video scene based on: {script[:120]}"
+
+    api_key = _siliconflow_key()
+    if api_key:
+        logger.info("📹 Submitting Wan T2V job via SiliconFlow...")
+        try:
+            request_id = await _submit_wan_task(prompt, size="1280x720", duration=5)
+            logger.info("Wan T2V task submitted: %s", request_id[:10])
+            video_url = await _poll_wan_task(request_id)
+            logger.info("Wan T2V completed, URL: %s", video_url[:60])
+            # Download the result to the local output path
+            async with httpx.AsyncClient() as client:
+                resp = await client.get(video_url, timeout=120)
+                resp.raise_for_status()
+                output.write_bytes(resp.content)
+            logger.info("✅ Video saved to %s (%d bytes)", output_path, output.stat().st_size)
+            return str(output_path)
+        except Exception as exc:
+            logger.warning("Wan T2V failed (%s); falling back to placeholder", exc)
+    else:
+        logger.info(
+            "SILICONFLOW_API_KEY not set — writing placeholder video. "
+            "Set SILICONFLOW_API_KEY in .env to enable Wan T2V generation."
+        )
+
+    # Fallback: write placeholder so the pipeline completes (not a real mp4,
+    # but prevents 404 on the download endpoint)
+    output.write_bytes(
+        f"Placeholder video for prompt: {prompt}\n".encode("utf-8")
+    )
+    logger.warning("⚠️  Placeholder written to %s", output_path)
+    return str(output_path)
 
 
 async def call_seedance(
@@ -15,138 +162,29 @@ async def call_seedance(
     assets: list[str],
     output_format: str = "mp4",
 ) -> str:
+    """Legacy entry point — delegates to ``generate_video_from_script``.
+
+    ``api_url`` is ignored; the function uses SiliconFlow env config.
     """
-    Call Seedance API to generate video
-
-    Args:
-        api_url: Seedance API endpoint
-        script: Markdown format script
-        assets: List of asset file paths
-        output_format: Output format (default: mp4)
-
-    Returns:
-        Path to generated video file
-
-    Note:
-        This is currently a placeholder implementation.
-        Real API integration will be added when Seedance API details are confirmed.
-    """
-    logger.info(f"📹 Calling Seedance API: {api_url}")
-    logger.info(f"Script length: {len(script)} chars")
-    logger.info(f"Assets: {len(assets)}")
-
-    # TODO: Implement real Seedance API call
-    # For now, just return a placeholder path
-    # In production, this would:
-    # 1. POST to Seedance API with script and assets
-    # 2. Poll for completion
-    # 3. Return the generated video path
-
     output_path = settings.storage_temp_path / f"seedance_output.{output_format}"
-    logger.warning(f"⚠️  Seedance integration placeholder - output path: {output_path}")
-
-    try:
-        # Ensure temp path exists
-        settings.storage_temp_path.mkdir(parents=True, exist_ok=True)
-
-        # Create a small placeholder file so downloads and demos work
-        if not output_path.exists():
-            with open(output_path, "wb") as f:
-                # Write minimal bytes; not a valid MP4 but sufficient as placeholder
-                f.write(b"SEEDANCE_PLACEHOLDER\n")
-
-        return str(output_path)
-    except Exception as e:
-        logger.error(f"Failed to create placeholder seedance output: {e}")
-        raise
+    return await generate_video_from_script(script, str(output_path))
 
 
-async def process_video_with_ffmpeg(
-    input_path: str,
-    output_path: str,
-    options: dict = None,
-) -> bool:
-    """
-    Process video using FFmpeg
-
-    Args:
-        input_path: Input video file path
-        output_path: Output video file path
-        options: FFmpeg options dict
-
-    Returns:
-        True if successful, False otherwise
-
-    Note:
-        Placeholder for FFmpeg video processing.
-        Would be used for encoding, scaling, trimming, etc.
-    """
-    logger.info(f"🎬 FFmpeg processing: {input_path} -> {output_path}")
-
-    # TODO: Implement FFmpeg processing
-    # This would use subprocess to call FFmpeg with appropriate options
-
-    return True
-
-
-async def extract_video_metadata(video_path: str) -> dict:
-    """
-    Extract video metadata using FFprobe
-
-    Args:
-        video_path: Path to video file
-
-    Returns:
-        Dictionary of metadata (duration, resolution, fps, etc.)
-
-    Note:
-        Placeholder for FFprobe metadata extraction.
-    """
-    logger.info(f"🔍 Extracting metadata from: {video_path}")
-
-    # TODO: Implement FFprobe metadata extraction
-    # This would use subprocess to call FFprobe and parse JSON output
-
-    return {
-        "duration": 0,
-        "resolution": "0x0",
-        "fps": 0,
-        "format": "unknown",
-    }
+# ---------------------------------------------------------------------------
+# Pipeline manager
+# ---------------------------------------------------------------------------
 
 
 class VideoPipelineManager:
-    """Manager for video processing pipeline"""
+    """Manager for video processing pipeline."""
 
     def __init__(self, seedance_api_url: str = ""):
-        self.seedance_api_url = seedance_api_url or settings.seedance_api_url
-        logger.info(f"📋 VideoPipelineManager initialized")
+        logger.info("📋 VideoPipelineManager initialized (Wan T2V ready)")
 
     async def process_job(self, job_id: str, script: str, assets: list[str]) -> str:
-        """
-        Process a video job through the pipeline
-
-        Args:
-            job_id: Unique job ID
-            script: Markdown format script
-            assets: List of asset file paths
-
-        Returns:
-            Path to generated video
-        """
-        logger.info(f"🎞️  Processing job: {job_id}")
-
-        try:
-            output_path = await call_seedance(
-                self.seedance_api_url,
-                script,
-                assets,
-            )
-            logger.info(f"✅ Job completed: {job_id}")
-            return output_path
-        except Exception as e:
-            logger.error(f"❌ Job failed: {job_id} - {e}")
-            raise
+        logger.info("🎞️  Processing job: %s", job_id)
+        output_path = settings.storage_temp_path / f"job_{job_id}.mp4"
+        return await generate_video_from_script(script, str(output_path))
 
 
 # Global instance

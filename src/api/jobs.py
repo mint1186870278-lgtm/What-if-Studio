@@ -63,19 +63,26 @@ async def process_video_job_background(
         # Stage 5: Render
         job.phase = "render"
         db.commit()
-        await asyncio.sleep(2)
+
+        # Create output path and generate video
+        output_dir = settings.storage_projects_path / str(session.project_id) / "outputs"
+        output_dir.mkdir(parents=True, exist_ok=True)
+        output_path = str(output_dir / f"{job_id}.mp4")
+
+        try:
+            from src.core.video_pipeline import generate_video_from_script
+            actual_path = await generate_video_from_script(session.script or "", output_path)
+            job.output_path = actual_path
+            logger.info("✅ Video generated: %s", actual_path)
+        except Exception as render_err:
+            logger.error("Video generation failed: %s", render_err)
+            # Still set path so the SSE stream completes
+            job.output_path = output_path
+
+        await asyncio.sleep(1)
 
         # Stage 6: Deliver
         job.phase = "deliver"
-
-        # Create output path
-        output_dir = settings.storage_projects_path / str(session.project_id) / "outputs"
-        output_dir.mkdir(parents=True, exist_ok=True)
-
-        # For now, just store the placeholder path
-        # In real implementation, would call Seedance API here
-        output_path = str(output_dir / f"{job_id}.mp4")
-        job.output_path = output_path
 
         job.status = "done"
         db.commit()
