@@ -22,7 +22,7 @@ logger = logging.getLogger(__name__)
 async def lifespan(app: FastAPI):
     """Application lifecycle management"""
     # Startup
-    logger.info("🚀 Starting Video Editing API")
+    logger.info("🚀 Starting whatif-studio API")
     settings.ensure_storage_paths()
     init_db()
     logger.info("✅ Database initialized")
@@ -30,13 +30,13 @@ async def lifespan(app: FastAPI):
     yield
 
     # Shutdown
-    logger.info("🛑 Shutting down Video Editing API")
+    logger.info("🛑 Shutting down whatif-studio API")
 
 
 # Create FastAPI application
 app = FastAPI(
-    title="Video Editing API",
-    description="FastAPI backend for creative video editing with multi-agent collaboration",
+    title="whatif-studio API",
+    description="FastAPI backend for whatif-studio creative video editing",
     version="0.1.0",
     lifespan=lifespan,
 )
@@ -55,13 +55,13 @@ app.add_middleware(
 @app.get("/health")
 async def health_check():
     """Health check endpoint"""
-    return {"status": "ok", "service": "video-editing-api"}
+    return {"status": "ok", "service": "whatif-studio"}
 
 
 @app.get("/api/health")
 async def api_health_check():
     """API health check endpoint"""
-    return {"status": "ok", "service": "video-editing-api"}
+    return {"status": "ok", "service": "whatif-studio"}
 
 
 # Error handlers

@@ -1,6 +1,7 @@
 """ANet gateway wrapper.
 
-Routes calls to local AutoGen services first and falls back to anet_sdk when available.
+Exposes backend capabilities through ANet-facing service names and delegates
+service invocation to the local domain implementation or ANet transport.
 """
 
 import logging
@@ -24,16 +25,25 @@ class ANetGateway:
                 logger.warning(f"anet_sdk present but failed to init SvcClient: {e}")
                 self.client = None
         except Exception:
-            logger.info("anet_sdk not available; using local autogen dispatch first")
+            logger.info("anet_sdk not available; ANet transport services will be unavailable")
 
     async def call_service(self, service_name: str, payload: Dict[str, Any]) -> Dict[str, Any]:
-        """Call an ANet-facing service name."""
+        """Call a service by explicit responsibility boundary.
+
+        - `autogen.*` services are handled by local AutoGen discussion domain.
+        - other ANet-facing services require `anet_sdk` transport.
+        """
         logger.info(f"Invoking service: {service_name} payload keys={list(payload.keys())}")
 
-        try:
+        if service_name.startswith("autogen.") or service_name in {
+            "agent-director",
+            "director",
+            "agent-composer",
+            "composer",
+            "agent-editor",
+            "editor",
+        }:
             return await dispatch_autogen_service(service_name, payload)
-        except Exception as local_exc:
-            logger.warning("Local autogen dispatch failed, trying anet_sdk fallback: %s", local_exc)
 
         if self.client:
             try:
@@ -49,9 +59,9 @@ class ANetGateway:
 
         return {
             "service": service_name,
-            "status": "mocked",
+            "status": "error",
             "payload_summary": {k: type(v).__name__ for k, v in payload.items()},
-            "message": "No local autogen match and anet_sdk unavailable.",
+            "message": "anet_sdk unavailable: non-autogen ANet service cannot be invoked.",
         }
 
 

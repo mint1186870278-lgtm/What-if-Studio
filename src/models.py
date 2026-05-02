@@ -18,6 +18,12 @@ class Project(Base):
     id = Column(String(36), primary_key=True, default=lambda: str(uuid4()))
     name = Column(String(255), nullable=False, index=True)
     description = Column(Text, nullable=True)
+    prompt = Column(Text, nullable=True)
+    style_preference = Column(String(50), default="auto", nullable=False)
+    script = Column(Text, nullable=True)
+    discussion_history = Column(JSON, default=list, nullable=False)
+    discussion_status = Column(String(50), default="idle", nullable=False)
+    last_opened_at = Column(DateTime, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     metadata_ = Column(JSON, default=dict, nullable=False)  # Custom fields

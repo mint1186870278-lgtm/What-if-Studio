@@ -29,7 +29,7 @@ async def list_services():
         {"name": "autogen.edit", "capability": "propose_editing_plan"},
         {"name": "autogen.sound", "capability": "compose_sound_design"},
         {"name": "anet.video_editing", "capability": "render_video_from_session_script_and_assets"},
-        {"name": "video-editing-api", "capability": "legacy_alias_of_anet.video_editing"},
+        {"name": "whatif-studio", "capability": "alias_of_anet.video_editing"},
     ]
     return {"services": services}
 
@@ -81,7 +81,7 @@ async def invoke_agent(req: InvokeRequest = Body(...), db: DBSession = Depends(g
         db.commit()
         db.refresh(inv)
 
-        if service in {"anet.video_editing", "video-editing-api", "video-render", "seedance.render"}:
+        if service in {"anet.video_editing", "whatif-studio", "video-render", "seedance.render"}:
             resp = await _invoke_video_editing_service(payload, db)
         else:
             # Call autogen services through ANet-facing gateway

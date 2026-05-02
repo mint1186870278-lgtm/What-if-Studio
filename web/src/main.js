@@ -2,13 +2,16 @@ import "./style.css";
 import { parseCreativeSession } from "./sessionSchema";
 import { createNetwork } from "./network";
 import {
+  createProject,
   createSession,
   createVideoJob,
   fetchAgents,
   fetchGatewayCapabilities,
   fetchGatewayInvocations,
+  getProject,
   streamDiscussion,
   uploadVideoSource,
+  updateProject,
   watchGatewayInvocations,
   watchVideoJob
 } from "./api";
@@ -155,6 +158,33 @@ app.innerHTML = `
           </footer>
         </article>
       </section>
+
+      <section id="script-review-overlay" class="result-overlay is-hidden">
+        <article class="result-panel">
+          <header class="result-head">
+            <div class="result-head-left">
+              <span class="result-status-dot" aria-hidden="true"></span>
+              <span class="result-title">导演讨论剧本</span>
+            </div>
+            <div class="result-head-right">
+              <button type="button" id="script-review-close-btn" class="result-close-btn" aria-label="关闭弹窗">&times;</button>
+            </div>
+          </header>
+          <div class="result-notes">
+            <div class="result-notes-head">SCRIPT</div>
+            <pre id="script-review-content" class="result-note-text" style="white-space: pre-wrap; max-height: 44vh; overflow:auto;"></pre>
+          </div>
+          <div class="result-notes">
+            <div class="result-notes-head">PROGRESS</div>
+            <div id="script-review-progress" class="result-note-text">等待生成</div>
+          </div>
+          <div id="script-review-video" class="result-media is-hidden"></div>
+          <footer class="result-actions">
+            <div class="result-actions-left"></div>
+            <button type="button" id="script-review-generate-btn" class="result-primary-btn">确认并生成视频</button>
+          </footer>
+        </article>
+      </section>
     </div>
   </div>
 `;
@@ -199,6 +229,12 @@ const zoomResetBtn = document.querySelector("#zoom-reset-btn");
 const sourceVideoFileInput = document.querySelector("#source-video-file");
 const idleDialogueWarning = document.querySelector("#idle-dialogue-warning");
 const retryStreamBtn = document.querySelector("#retry-stream-btn");
+const scriptReviewOverlay = document.querySelector("#script-review-overlay");
+const scriptReviewCloseBtn = document.querySelector("#script-review-close-btn");
+const scriptReviewGenerateBtn = document.querySelector("#script-review-generate-btn");
+const scriptReviewContent = document.querySelector("#script-review-content");
+const scriptReviewProgress = document.querySelector("#script-review-progress");
+const scriptReviewVideo = document.querySelector("#script-review-video");
 
 let networkHandle;
 let unsubscribeJob = null;
@@ -223,6 +259,68 @@ let idleSpeechVisibleByZoom = false;
 let latestResultPayload = null;
 let latestSessionTitle = "";
 let latestDiscussionTranscript = [];
+let activeProjectId = null;
+let latestGeneratedScript = "";
+
+function setProjectQuery(projectId) {
+  const url = new URL(window.location.href);
+  if (projectId) url.searchParams.set("project", projectId);
+  else url.searchParams.delete("project");
+  window.history.replaceState({}, "", url.toString());
+}
+
+async function loadProjectFromQuery() {
+  const url = new URL(window.location.href);
+  const projectId = String(url.searchParams.get("project") || "").trim();
+  if (!projectId) return;
+  try {
+    const project = await getProject(projectId);
+    activeProjectId = String(project.id);
+    const workTitleInput = document.querySelector("#work-title");
+    const endingDirectionInput = document.querySelector("#ending-direction");
+    const stylePreferenceInput = document.querySelector("#style-preference");
+    if (workTitleInput && project.name) workTitleInput.value = project.name;
+    if (endingDirectionInput && project.prompt) endingDirectionInput.value = project.prompt;
+    if (stylePreferenceInput && project.style_preference) stylePreferenceInput.value = project.style_preference;
+    if (project.script) latestGeneratedScript = String(project.script);
+  } catch {
+    activeProjectId = null;
+    setProjectQuery(null);
+  }
+}
+
+function openScriptReview(scriptText) {
+  scriptReviewContent.textContent = scriptText || "暂无脚本";
+  scriptReviewProgress.textContent = "讨论完成，等待确认生成视频";
+  scriptReviewVideo.classList.add("is-hidden");
+  scriptReviewVideo.innerHTML = "";
+  scriptReviewGenerateBtn.classList.remove("is-hidden");
+  scriptReviewGenerateBtn.disabled = false;
+  scriptReviewOverlay.classList.remove("is-hidden");
+}
+
+function closeScriptReview() {
+  scriptReviewOverlay.classList.add("is-hidden");
+}
+
+function waitForGenerateConfirm() {
+  return new Promise((resolve, reject) => {
+    const onConfirm = () => {
+      cleanup();
+      resolve(true);
+    };
+    const onClose = () => {
+      cleanup();
+      reject(new Error("已取消生成"));
+    };
+    function cleanup() {
+      scriptReviewGenerateBtn.removeEventListener("click", onConfirm);
+      scriptReviewCloseBtn.removeEventListener("click", onClose);
+    }
+    scriptReviewGenerateBtn.addEventListener("click", onConfirm);
+    scriptReviewCloseBtn.addEventListener("click", onClose);
+  });
+}
 
 function setNetworkCallPanelCollapsed(collapsed) {
   networkCallPanel?.classList.toggle("is-collapsed", collapsed);
@@ -929,6 +1027,7 @@ async function bootstrap() {
   networkHandle.setIdleSpeechEnabled(false);
   startSpotlight();
   setRoleBuckets(createEmptyRoleBuckets());
+  await loadProjectFromQuery();
 }
 
 inputOverlay.addEventListener("submit", async (event) => {
@@ -966,7 +1065,28 @@ inputOverlay.addEventListener("submit", async (event) => {
   renderSystemLine(`主舞台核心成员 ${countStageAuthorsAndDirectors(currentRoleBuckets)} 位。`);
 
   try {
-    const { session } = await createSession(payload);
+    if (!activeProjectId) {
+      const project = await createProject({
+        name: payload.workTitle,
+        description: "",
+        prompt: payload.endingDirection,
+        style_preference: payload.stylePreference
+      });
+      activeProjectId = String(project.id);
+      setProjectQuery(activeProjectId);
+    } else {
+      await updateProject(activeProjectId, {
+        name: payload.workTitle,
+        prompt: payload.endingDirection,
+        style_preference: payload.stylePreference
+      });
+    }
+
+    const { session } = await createSession({
+      projectId: activeProjectId,
+      prompt: payload.endingDirection,
+      stylePreference: payload.stylePreference
+    });
     renderSystemLine(`会话已创建：${session.sessionId}`);
     renderSystemLine("导演与原著守门人讨论中…");
     networkHandle.pulseZone("mainStage");
@@ -976,7 +1096,7 @@ inputOverlay.addEventListener("submit", async (event) => {
     try {
       await streamDiscussion(session.sessionId, (turn) => {
         if (!sessionRunning || activeChatChannel !== "live") return;
-        if (turn.event === "turn") {
+        if (turn.event === "turn" || turn.type === "turn") {
           const speakerAgent = allAgents.find((agent) => agent.name === turn.speaker);
           const speakerAgentId = speakerAgent?.agentId || "";
           const speakerInParticipants = isParticipantAgentId(speakerAgentId);
@@ -988,22 +1108,24 @@ inputOverlay.addEventListener("submit", async (event) => {
           latestDiscussionTranscript.push(`${resolveSpeakerDisplayName(turn.speaker)}：${turn.content}`);
           updateActiveAgentsFromNames([turn.speaker], turn.speaker);
           if (speakerAgent) networkHandle.showAgentSpeech(speakerAgent.agentId, turn.content, { duration: 3600, force: true });
-        } else if (turn.event === "topic") {
+        } else if (turn.event === "topic" || turn.type === "topic") {
           ensureDiscussionSection(turn.stage);
           renderSystemLine(`${turn.title}｜${turn.goal}`);
           latestDiscussionTranscript.push(`系统｜${turn.title}：${turn.goal}`);
-        } else if (turn.event === "system") {
+        } else if (turn.event === "system" || turn.type === "system") {
           ensureDiscussionSection(turn.stage);
           renderSystemLine(turn.content);
           latestDiscussionTranscript.push(`系统：${turn.content}`);
-        } else if (turn.event === "summary") {
+        } else if (turn.event === "summary" || turn.type === "summary") {
           ensureDiscussionSection(turn.stage);
           renderSummaryLine(turn.content);
           latestDiscussionTranscript.push(`总结：${turn.content}`);
-        } else if (turn.event === "done") {
+        } else if (turn.event === "done" || turn.type === "done") {
           renderSummaryLine("讨论结论已达成，剧组进入制作管线。");
           latestDiscussionTranscript.push("系统：讨论结论已达成，剧组进入制作管线。");
           renderSectionLine("pipeline");
+        } else if (turn.type === "script") {
+          latestGeneratedScript = String(turn.script || "");
         }
       });
     } catch (discussionError) {
@@ -1013,12 +1135,20 @@ inputOverlay.addEventListener("submit", async (event) => {
       throw new Error(`讨论流中断：${discussionError.message}`);
     }
 
-    let sourceVideoRef = "";
+    if (!latestGeneratedScript && latestDiscussionTranscript.length) {
+      latestGeneratedScript = latestDiscussionTranscript.join("\n");
+    }
+    openScriptReview(latestGeneratedScript);
+    await waitForGenerateConfirm();
+    scriptReviewGenerateBtn.disabled = true;
+    scriptReviewProgress.textContent = "视频任务创建中…";
+
+    let sourceVideoRef = [];
     if (sourceVideoFile) {
       renderSystemLine(`素材上传中：${sourceVideoFile.name}`);
-      const { upload } = await uploadVideoSource(sourceVideoFile);
+      const { upload } = await uploadVideoSource(activeProjectId, sourceVideoFile);
       renderSystemLine(`素材上传完成：${upload.originalName}`);
-      sourceVideoRef = { uploadId: upload.uploadId };
+      sourceVideoRef = [upload.uploadId];
     }
     const { job } = await createVideoJob(session.sessionId, sourceVideoRef);
     renderSystemLine(`视频任务已创建：${job.jobId}`);
@@ -1037,6 +1167,7 @@ inputOverlay.addEventListener("submit", async (event) => {
               lastPhaseSection = phase;
             }
             renderSystemLine(`${evt.phase}: ${evt.message}`);
+            scriptReviewProgress.textContent = `${evt.phase}: ${evt.message}`;
             networkHandle.setPhase(phase);
             markTimelinePhase(phase === "forming" ? "collect" : phase);
             return;
@@ -1049,6 +1180,16 @@ inputOverlay.addEventListener("submit", async (event) => {
             networkHandle.setActiveAgents([]);
             window.setTimeout(() => networkHandle.release(), 7600);
             liveOverlay.classList.add("is-fading");
+            scriptReviewProgress.textContent = "生成完成";
+            const publicUrl = String(evt?.result?.publicUrl || "");
+            if (publicUrl) {
+              scriptReviewVideo.classList.remove("is-hidden");
+              scriptReviewVideo.innerHTML = `
+                <video controls preload="metadata" src="${escapeHtml(publicUrl)}"></video>
+                <a href="${escapeHtml(publicUrl)}" target="_blank" rel="noreferrer">在新窗口打开视频</a>
+              `;
+            }
+            scriptReviewGenerateBtn.classList.add("is-hidden");
             setTimeout(() => {
               closeLive();
               spotlightCard.classList.remove("is-hidden");
@@ -1058,6 +1199,8 @@ inputOverlay.addEventListener("submit", async (event) => {
           }
           if (evt.event === "error") {
             renderSystemLine(evt.message || "任务事件流中断。");
+            scriptReviewProgress.textContent = evt.message || "任务事件流中断";
+            scriptReviewGenerateBtn.disabled = false;
             setStreamRetryAction("重连任务流", async () => {
               renderSystemLine("正在重连任务流…");
               attachVideoStream();
@@ -1077,6 +1220,8 @@ inputOverlay.addEventListener("submit", async (event) => {
     attachVideoStream();
   } catch (error) {
     renderSystemLine(`任务失败：${error.message}`);
+    scriptReviewProgress.textContent = `失败：${error.message}`;
+    scriptReviewGenerateBtn.disabled = false;
     networkHandle.release();
     resetSessionUiToIdle();
     queueText.textContent = "ERROR";
@@ -1122,6 +1267,9 @@ downloadShareBtn.addEventListener("click", async () => {
 
 resultOverlay.addEventListener("click", (event) => {
   if (event.target === resultOverlay) hideResultOverlay();
+});
+scriptReviewOverlay.addEventListener("click", (event) => {
+  if (event.target === scriptReviewOverlay) closeScriptReview();
 });
 
 window.addEventListener("keydown", (event) => {
