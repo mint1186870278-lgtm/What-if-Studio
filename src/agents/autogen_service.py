@@ -78,6 +78,7 @@ def _model_client() -> "OpenAIChatCompletionClient":
         "api_key": settings.openai_api_key,
         "base_url": base_url,
         "temperature": 0.7,
+        "max_tokens": 200,
     }
     model_info = _infer_model_info(model_name)
     if model_info is not None:
@@ -111,9 +112,8 @@ def _build_team() -> tuple[Any, Any]:
             description=f"{_agent_label(agent_map, narrative_id, 'Narrative Director')} decides whether to join and focuses on story logic.",
             model_client=client,
             system_message=(
-                "You are the NarrativeDirector. Your first response MUST start with either 'JOIN:' or 'SKIP:'. "
-                "If SKIP, give one concise reason and stop. If JOIN, continue in later turns and focus on story logic, causality, "
-                "and emotional payoff. Keep replies concise."
+                "你是NarrativeDirector。开头必须说JOIN:或SKIP:。"
+                "如果SKIP，说一句理由就结束。如果JOIN，每轮只说一句话（不超过50字）。必须用中文。"
             ),
             model_client_stream=True,
         ),
@@ -122,10 +122,8 @@ def _build_team() -> tuple[Any, Any]:
             description=f"{_agent_label(agent_map, visual_id, 'Visual Director')} focuses on editing, shot rhythm, and visual structure.",
             model_client=client,
             system_message=(
-                "You are the VisualDirector. Your first response MUST start with either 'JOIN:' or 'SKIP:'. "
-                "If SKIP, give one concise reason and stop. If JOIN, debate the edit, "
-                "shot rhythm, composition, and scene continuity. When the discussion turns to division of labor, "
-                "own the editing part. Keep replies concise."
+                "你是VisualDirector。开头必须说JOIN:或SKIP:。"
+                "如果SKIP，说一句理由就结束。如果JOIN，每轮只说一句话（不超过50字）。必须用中文。"
             ),
             model_client_stream=True,
         ),
@@ -134,10 +132,8 @@ def _build_team() -> tuple[Any, Any]:
             description=f"{_agent_label(agent_map, sound_id, 'Sound Director')} focuses on audio, score, and sound design.",
             model_client=client,
             system_message=(
-                "You are the SoundDirector. Your first response MUST start with either 'JOIN:' or 'SKIP:'. "
-                "If SKIP, give one concise reason and stop. If JOIN, debate audio design, "
-                "score, silence, and emotional pacing. When the discussion turns to division of labor, "
-                "own the audio part. Keep replies concise."
+                "你是SoundDirector。开头必须说JOIN:或SKIP:。"
+                "如果SKIP，说一句理由就结束。如果JOIN，每轮只说一句话（不超过50字）。必须用中文。"
             ),
             model_client_stream=True,
         ),
@@ -146,10 +142,8 @@ def _build_team() -> tuple[Any, Any]:
             description=f"{_agent_label(agent_map, material_id, 'Material Director')} focuses on materials and asset selection.",
             model_client=client,
             system_message=(
-                "You are the MaterialDirector. Your first response MUST start with either 'JOIN:' or 'SKIP:'. "
-                "If SKIP, give one concise reason and stop. If JOIN, debate what materials "
-                "or assets are needed and which project assets should be selected. When the discussion turns to "
-                "division of labor, own the material selection part. Keep replies concise."
+                "你是MaterialDirector。开头必须说JOIN:或SKIP:。"
+                "如果SKIP，说一句理由就结束。如果JOIN，每轮只说一句话（不超过50字）。必须用中文。"
             ),
             model_client_stream=True,
         ),
@@ -158,14 +152,13 @@ def _build_team() -> tuple[Any, Any]:
             description=f"{_agent_label(agent_map, critic_id, 'Critic')} synthesizes the debate into a final markdown script.",
             model_client=client,
             system_message=(
-                "You are the Critic. Synthesize the debate into one large Markdown script with three sections: "
-                "editing, audio, and materials. End your final response with FINAL_JSON and a single JSON object "
-                "with keys final_script, edit_instructions, audio_design, material_selection, new_shot_description."
+                "你是Critic。听取大家的意见后，用中文汇总一份Markdown脚本，包含editing、audio、materials三部分。"
+                "最后用FINAL_JSON输出JSON对象，keys: final_script, edit_instructions, audio_design, material_selection, new_shot_description。"
             ),
             model_client_stream=True,
         ),
     ]
-    termination = MaxMessageTermination(max_messages=18)
+    termination = MaxMessageTermination(max_messages=10)
     team = RoundRobinGroupChat(
         participants=participants,
         termination_condition=termination,
@@ -184,10 +177,20 @@ def _message_to_event(message: Any, id_by_py_name: dict[str, str] | None = None)
         "type": "turn",
         "speaker": source,
         "role": source,
-        "content": content,
+        "content": _clean_content(content),
         "stage": "debate",
         "ts": int(asyncio.get_running_loop().time() * 1000),
     }
+
+
+def _clean_content(content: str) -> str:
+    """Remove thinking tags and leading English, keep only Chinese."""
+    import re
+    # Remove <think>...</think> blocks
+    cleaned = re.sub(r"<think>.*?</think>", "", content, flags=re.DOTALL)
+    # Remove leading English text before Chinese starts (e.g. "I think we should...方案是")
+    cleaned = re.sub(r"^[A-Za-z,\s;:!.'\"()]+(?=[一-鿿])", "", cleaned)
+    return cleaned.strip()
 
 
 def _chunk_to_event(message: Any, id_by_py_name: dict[str, str] | None = None) -> dict[str, Any]:
@@ -201,7 +204,7 @@ def _chunk_to_event(message: Any, id_by_py_name: dict[str, str] | None = None) -
         "type": "turn_chunk",
         "speaker": source,
         "role": source,
-        "content": content,
+        "content": _clean_content(content),
         "stage": "debate",
         "ts": int(asyncio.get_running_loop().time() * 1000),
     }
@@ -250,10 +253,10 @@ async def run_autogen_discussion_stream(
         f"User request: {user_request}\n"
         f"Style: {style}\n"
         f"Performance notes: {performance_notes or ''}\n\n"
-        "Phase 1: each director must output one decision line starting with JOIN: or SKIP:.\n"
-        "Phase 2: joined directors debate the edit plan, sound plan, and materials.\n"
-        "Phase 3: divide work into editing, audio, and material selection.\n"
-        "Phase 4: Critic synthesizes everything into a single large Markdown script and ends with FINAL_JSON."
+        "Phase 1: each director says JOIN: or SKIP:.\n"
+        "Phase 2: joined directors debate briefly.\n"
+        "Phase 3: Critic writes a Markdown script and ends with FINAL_JSON.\n"
+        "所有回答必须用中文。回答尽量简短。"
     )
 
     final_text = ""
