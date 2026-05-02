@@ -8,11 +8,16 @@ import {
   fetchGatewayCapabilities,
   fetchGatewayInvocations,
   streamDiscussion,
+  uploadVideoSource,
   watchGatewayInvocations,
   watchVideoJob
 } from "./api";
 import { getDisplayName } from "./displayNames";
 import { createIdleDialogueEngine } from "./idleDialogueEngine";
+import { createEmptyRoleBuckets, inferTagsFromSession, pickRoleBuckets } from "./roleBuckets";
+
+const IDLE_SPEECH_DURATION_MS = 3200;
+const IDLE_REPLY_GAP_MS = 3000;
 
 const app = document.querySelector("#app");
 
@@ -28,8 +33,6 @@ app.innerHTML = `
         </div>
         <h1>意难平剧组</h1>
         <p class="card-summary">无限画布浏览模式已开启，可先逛房间再开机。</p>
-        <p class="card-summary card-summary-soft">建议演示题材：哈利波特 / 甄嬛传 / 漫威宇宙。</p>
-
         <label class="field-label" for="work-title">作品名称</label>
         <input id="work-title" name="workTitle" placeholder="例如：哈利波特与凤凰社" required />
 
@@ -45,12 +48,8 @@ app.innerHTML = `
           <option value="fantasyGrand">偏奇幻宏大</option>
         </select>
 
-        <label class="field-label" for="source-video-path">素材视频路径（可选）</label>
-        <input
-          id="source-video-path"
-          name="sourceVideoPath"
-          placeholder="例如：D:\\clips\\trailer.mp4（不填将回退占位成片）"
-        />
+        <label class="field-label" for="source-video-file">上传素材视频（可选）</label>
+        <input id="source-video-file" name="sourceVideoFile" type="file" accept="video/*" />
         <p id="idle-dialogue-warning" class="card-summary card-summary-soft form-warning is-hidden">
           闲聊语料加载失败，已降级为基础闲聊模式。
         </p>
@@ -77,10 +76,21 @@ app.innerHTML = `
         <span id="queue-text">STANDBY</span>
       </div>
 
-      <aside id="network-call-panel" class="network-call-panel">
+      <aside id="network-call-panel" class="network-call-panel is-collapsed">
         <div class="network-call-head">
           <span class="network-call-title">Agent Network</span>
-          <span id="network-call-status" class="network-call-status">SYNCING</span>
+          <div class="network-call-actions">
+            <span id="network-call-status" class="network-call-status">SYNCING</span>
+            <button
+              type="button"
+              id="network-call-toggle"
+              class="network-call-toggle"
+              aria-expanded="false"
+              aria-label="展开 Agent Network 面板"
+            >
+              展开
+            </button>
+          </div>
         </div>
         <div class="network-call-meta" id="network-call-meta">加载能力目录中…</div>
         <div class="network-call-feed" id="network-call-feed"></div>
@@ -90,6 +100,7 @@ app.innerHTML = `
         <div class="live-overlay-header">
           <span class="live-dot"></span>
           <span class="live-title" id="live-title">PRODUCTION IN PROGRESS</span>
+          <button type="button" id="retry-stream-btn" class="ghost-btn is-hidden">重试流连接</button>
         </div>
         <div class="phase-timeline" id="phase-timeline">
           <span data-phase="collect">collect</span>
@@ -121,10 +132,27 @@ app.innerHTML = `
 
       <section id="result-overlay" class="result-overlay is-hidden">
         <article class="result-panel">
-          <h3>平行结局已完成</h3>
+          <header class="result-head">
+            <div class="result-head-left">
+              <span class="result-status-dot" aria-hidden="true"></span>
+              <span id="result-title" class="result-title">平行结局已完成</span>
+            </div>
+            <div class="result-head-right">
+              <span id="result-work-name" class="result-work-name">意难平剧组</span>
+              <button type="button" id="result-close-btn" class="result-close-btn" aria-label="关闭结果弹窗">&times;</button>
+            </div>
+          </header>
           <div id="result-media" class="result-media is-hidden"></div>
-          <pre id="result-body"></pre>
-          <button type="button" id="restart-btn">重新制作</button>
+          <section class="result-notes">
+            <div class="result-notes-head">CREW NOTES</div>
+            <div id="result-notes-list" class="result-notes-list"></div>
+          </section>
+          <footer class="result-actions">
+            <div class="result-actions-left">
+              <button type="button" id="download-share-btn" class="ghost-btn result-ghost-btn">下载 / 分享</button>
+            </div>
+            <button type="button" id="restart-btn" class="result-primary-btn">重新制作</button>
+          </footer>
         </article>
       </section>
     </div>
@@ -138,8 +166,12 @@ const liveOverlay = document.querySelector("#live-overlay");
 const liveFeed = document.querySelector("#live-feed");
 const liveTitle = document.querySelector("#live-title");
 const resultOverlay = document.querySelector("#result-overlay");
-const resultBody = document.querySelector("#result-body");
+const resultTitle = document.querySelector("#result-title");
+const resultWorkName = document.querySelector("#result-work-name");
+const resultCloseBtn = document.querySelector("#result-close-btn");
 const resultMedia = document.querySelector("#result-media");
+const resultNotesList = document.querySelector("#result-notes-list");
+const downloadShareBtn = document.querySelector("#download-share-btn");
 const restartBtn = document.querySelector("#restart-btn");
 const spotlightCard = document.querySelector("#spotlight-card");
 const spotlightName = document.querySelector("#spotlight-name");
@@ -154,16 +186,19 @@ const detailStage = document.querySelector("#detail-stage");
 const detailSummary = document.querySelector("#detail-summary");
 const detailClose = document.querySelector("#agent-detail-close");
 const queueText = document.querySelector("#queue-text");
+const networkCallPanel = document.querySelector("#network-call-panel");
 const networkCallFeed = document.querySelector("#network-call-feed");
 const networkCallMeta = document.querySelector("#network-call-meta");
 const networkCallStatus = document.querySelector("#network-call-status");
+const networkCallToggle = document.querySelector("#network-call-toggle");
 const phaseTimeline = document.querySelector("#phase-timeline");
 const loadDemoBtn = document.querySelector("#load-demo-btn");
 const overlayToggleBtn = document.querySelector("#overlay-toggle-btn");
 const zoomDirectorsBtn = document.querySelector("#zoom-directors-btn");
 const zoomResetBtn = document.querySelector("#zoom-reset-btn");
-const sourceVideoPathInput = document.querySelector("#source-video-path");
+const sourceVideoFileInput = document.querySelector("#source-video-file");
 const idleDialogueWarning = document.querySelector("#idle-dialogue-warning");
+const retryStreamBtn = document.querySelector("#retry-stream-btn");
 
 let networkHandle;
 let unsubscribeJob = null;
@@ -180,32 +215,62 @@ let overlayCollapsed = false;
 let sessionRunning = false;
 let activeChatChannel = "idle";
 let stopGatewayWatch = null;
+let gatewayReconnectTimer = null;
 let gatewayInvocationItems = [];
-let currentRoleBuckets = {
-  participants: new Set(),
-  lateJoiners: new Set(),
-  observers: new Set(),
-  absent: new Set()
-};
+let streamRetryAction = null;
+let currentRoleBuckets = createEmptyRoleBuckets();
+let idleSpeechVisibleByZoom = false;
+let latestResultPayload = null;
+let latestSessionTitle = "";
+let latestDiscussionTranscript = [];
+
+function setNetworkCallPanelCollapsed(collapsed) {
+  networkCallPanel?.classList.toggle("is-collapsed", collapsed);
+  if (!networkCallToggle) return;
+  networkCallToggle.textContent = collapsed ? "展开" : "收起";
+  networkCallToggle.setAttribute("aria-expanded", collapsed ? "false" : "true");
+  networkCallToggle.setAttribute("aria-label", collapsed ? "展开 Agent Network 面板" : "折叠 Agent Network 面板");
+}
+
+function isKeyGatewayInvocation(item) {
+  const status = String(item?.status || "").toLowerCase();
+  const durationMs = Number(item?.durationMs || 0);
+  return status === "failed" || status === "error" || Boolean(item?.fallbackFromCapabilityId) || durationMs >= 1200;
+}
+
+function formatGatewayStatus(status) {
+  const normalized = String(status || "").toLowerCase();
+  if (normalized === "ok") return "成功";
+  if (normalized === "failed" || normalized === "error") return "失败";
+  if (normalized === "calling") return "调用中";
+  return normalized || "unknown";
+}
 
 function renderGatewayInvocations() {
-  const items = gatewayInvocationItems.slice(0, 10);
+  const recentItems = gatewayInvocationItems.slice(0, 16);
+  const keyItems = recentItems.filter((item) => isKeyGatewayInvocation(item)).slice(0, 2);
+  const items = keyItems.length ? keyItems : recentItems.slice(0, 2);
   if (!items.length) {
-    networkCallFeed.innerHTML = `<div class="network-call-empty">暂无跨 Agent 调用</div>`;
+    networkCallFeed.innerHTML = `<div class="network-call-empty">暂无关键事件</div>`;
     return;
   }
   networkCallFeed.innerHTML = items
     .map((item) => {
-      const statusClass = item.status === "ok" ? "is-ok" : "is-failed";
+      const normalizedStatus = String(item.status || "").toLowerCase();
+      const statusClass = normalizedStatus === "failed" || normalizedStatus === "error" ? "is-failed" : "is-ok";
       const fallbackBadge = item.fallbackFromCapabilityId
-        ? `<span class="network-call-badge">fallback from ${escapeHtml(item.fallbackFromCapabilityId)}</span>`
+        ? `<span class="network-call-badge">fallback</span>`
         : "";
+      const capability = escapeHtml(item.capabilityId || "unknown-capability");
+      const caller = escapeHtml(item.caller || "unknown");
+      const target = escapeHtml(item.targetServiceId || "unresolved");
+      const statusLabel = formatGatewayStatus(item.status);
       return `
         <article class="network-call-item ${statusClass}">
-          <div class="network-call-route">${escapeHtml(item.caller || "unknown")} → ${escapeHtml(item.targetServiceId || "unresolved")}</div>
-          <div class="network-call-capability">${escapeHtml(item.capabilityId || "unknown-capability")}</div>
+          <div class="network-call-capability">${capability}</div>
+          <div class="network-call-route">${caller} → ${target}</div>
           <div class="network-call-foot">
-            <span>${escapeHtml(item.status || "unknown")} · ${Number(item.durationMs || 0)}ms</span>
+            <span>${statusLabel} · ${Number(item.durationMs || 0)}ms</span>
             ${fallbackBadge}
           </div>
         </article>
@@ -220,26 +285,49 @@ function pushGatewayInvocation(item) {
   renderGatewayInvocations();
 }
 
+function clearStreamRetryAction() {
+  streamRetryAction = null;
+  retryStreamBtn.classList.add("is-hidden");
+  retryStreamBtn.textContent = "重试流连接";
+}
+
+function setStreamRetryAction(label, action) {
+  streamRetryAction = typeof action === "function" ? action : null;
+  retryStreamBtn.textContent = label || "重试流连接";
+  retryStreamBtn.classList.toggle("is-hidden", !streamRetryAction);
+}
+
 function startGatewayTraceStream() {
   if (stopGatewayWatch) stopGatewayWatch();
-  stopGatewayWatch = watchGatewayInvocations((event) => {
-    if (event?.event === "error") {
-      networkCallStatus.textContent = "DEGRADED";
-      networkCallStatus.classList.add("is-failed");
-      return;
+  stopGatewayWatch = watchGatewayInvocations(
+    (event) => {
+      if (event?.event === "error") {
+        networkCallStatus.textContent = "DEGRADED";
+        networkCallStatus.classList.add("is-failed");
+        return;
+      }
+      networkCallStatus.textContent = "LIVE";
+      networkCallStatus.classList.remove("is-failed");
+      const from = String(event?.from || event?.caller || "").trim();
+      const to = String(event?.to || event?.targetServiceId || "").trim();
+      if (from && to && networkHandle?.flashLink) {
+        networkHandle.flashLink(from, to, {
+          status: String(event?.status || ""),
+          duration: event?.status === "calling" ? 1500 : 1200
+        });
+      }
+      pushGatewayInvocation(event);
+    },
+    {
+      onDisconnect: () => {
+        if (gatewayReconnectTimer) return;
+        gatewayReconnectTimer = window.setTimeout(() => {
+          gatewayReconnectTimer = null;
+          startGatewayTraceStream();
+        }, 2000);
+      }
     }
-    networkCallStatus.textContent = "LIVE";
-    networkCallStatus.classList.remove("is-failed");
-    const from = String(event?.from || event?.caller || "").trim();
-    const to = String(event?.to || event?.targetServiceId || "").trim();
-    if (from && to && networkHandle?.flashLink) {
-      networkHandle.flashLink(from, to, {
-        status: String(event?.status || ""),
-        duration: event?.status === "calling" ? 1500 : 1200
-      });
-    }
-    pushGatewayInvocation(event);
-  });
+  );
 }
 
 function escapeHtml(text) {
@@ -312,7 +400,22 @@ function probeImage(url) {
   });
 }
 
+const STRICT_AVATAR_BY_AGENT_ID = {
+  "agent-burton": "/mock/avatars/director-burton.png",
+  "agent-columbus": "/mock/avatars/director-columbus.png",
+  "agent-cuaron": "/mock/avatars/director-cuaron.png",
+  "agent-curtis": "/mock/avatars/director-curtis.png",
+  "agent-jackson": "/mock/avatars/director-jackson.png",
+  "agent-newell": "/mock/avatars/director-newell.png",
+  "agent-spielberg": "/mock/avatars/director-spielberg.png",
+  "agent-yates": "/mock/avatars/director-yates.png",
+  "agent-rowling": "/mock/avatars/guardian-rowling.png",
+  "agent-tolkien": "/mock/avatars/guardian-tolkien.png"
+};
+
 async function resolveAvatarUrl(agent) {
+  const strictAvatar = STRICT_AVATAR_BY_AGENT_ID[String(agent?.agentId || "")];
+  if (strictAvatar) return strictAvatar;
   const fromConfig = buildAvatarCandidates(agent?.avatarUrl);
   const fromName = buildAvatarNameCandidates(agent);
   const candidates = [...new Set([...fromConfig, ...fromName])];
@@ -420,6 +523,8 @@ function renderMessageLine(speaker, content) {
 function openLive(question) {
   sessionRunning = true;
   activeChatChannel = "live";
+  idleSpeechVisibleByZoom = false;
+  latestDiscussionTranscript = [];
   liveTitle.textContent = `片场直播 | ${question}`;
   liveFeed.innerHTML = "";
   liveFeed.insertAdjacentHTML(
@@ -430,7 +535,9 @@ function openLive(question) {
   liveOverlay.classList.remove("is-hidden");
   idleBanner.classList.add("is-hidden");
   stopIdleChatter();
+  networkHandle?.setIdleSpeechEnabled(false);
   queueText.textContent = "LIVE";
+  clearStreamRetryAction();
   lastPhaseSection = "";
   ensureDiscussionSection("briefing");
   renderSystemLine("导演组就位，讨论系统启动。");
@@ -439,10 +546,81 @@ function openLive(question) {
 function closeLive() {
   sessionRunning = false;
   activeChatChannel = "idle";
+  idleSpeechVisibleByZoom = false;
   liveOverlay.classList.remove("is-fading");
   liveOverlay.classList.add("is-hidden");
   queueText.textContent = "STANDBY";
+  clearStreamRetryAction();
+  networkHandle?.setIdleSpeechEnabled(false);
+}
+
+function hideResultOverlay() {
+  resultOverlay.classList.add("is-hidden");
+}
+
+function clearResultOverlay() {
+  hideResultOverlay();
+  resultMedia.classList.add("is-hidden");
+  resultMedia.innerHTML = "";
+  resultNotesList.innerHTML = "";
+  latestResultPayload = null;
+}
+
+function resetSessionUiToIdle() {
+  if (unsubscribeJob) unsubscribeJob();
+  clearStreamRetryAction();
+  closeLive();
+  toggleOverlayCollapsed(false);
+  idleBanner.classList.remove("is-hidden");
+  spotlightCard.classList.remove("is-hidden");
+  hideAgentDetail();
+  queueText.textContent = "STANDBY";
+  activeAgentIds.clear();
+  setRoleBuckets(createEmptyRoleBuckets());
+  if (networkHandle) {
+    networkHandle.setActiveAgents([]);
+    networkHandle.setPhase("idle");
+  }
+  liveFeed.innerHTML = "";
   startIdleChatter();
+}
+
+function buildCrewNotes() {
+  const participantIds = Array.from(currentRoleBuckets.participants || []).slice(0, 3);
+  const picked = participantIds
+    .map((id) => allAgents.find((agent) => agent.agentId === id))
+    .filter(Boolean);
+  if (picked.length) return picked;
+  return allAgents.slice(0, 3);
+}
+
+function renderCrewNotes() {
+  const notes = buildCrewNotes();
+  if (!notes.length) {
+    resultNotesList.innerHTML = `<div class="result-note-card"><div class="result-note-text">暂无导演组点评。</div></div>`;
+    return;
+  }
+  resultNotesList.innerHTML = notes
+    .map((agent) => {
+      const display = getDisplayName(agent);
+      const initial = escapeHtml((display.zh || display.en || "?").slice(0, 1));
+      const noteText = escapeHtml(agent.stance || "本轮结局已生成，可继续迭代。");
+      const avatarHtml = agent?.avatarUrl
+        ? `<img class="result-note-avatar-image" src="${escapeHtml(agent.avatarUrl)}" alt="${escapeHtml(
+            display.zh || display.en || "匿名成员"
+          )}">`
+        : `<span class="result-note-avatar-placeholder" aria-hidden="true">${initial}</span>`;
+      return `
+        <article class="result-note-card">
+          <div class="result-note-avatar">${avatarHtml}</div>
+          <div class="result-note-body">
+            <div class="result-note-name">${escapeHtml(display.zh || display.en || "匿名成员")}</div>
+            <p class="result-note-text">${noteText}</p>
+          </div>
+        </article>
+      `;
+    })
+    .join("");
 }
 
 function roleLabel(type) {
@@ -457,56 +635,12 @@ function toggleOverlayCollapsed(force) {
   overlayToggleBtn.textContent = overlayCollapsed ? "展开" : "收起";
 }
 
-function inferTagsFromSession(payload) {
-  const text = `${payload.workTitle} ${payload.endingDirection}`.toLowerCase();
-  const tags = new Set();
-  if (text.includes("爱") || text.includes("拥抱") || text.includes("团圆")) tags.add("romance");
-  if (text.includes("战争") || text.includes("史诗") || text.includes("救世")) tags.add("epic");
-  if (text.includes("魔法") || text.includes("奇幻") || text.includes("龙")) tags.add("fantasy");
-  if (text.includes("原著") || text.includes("改编") || text.includes("设定")) tags.add("adaptation");
-  if (payload.stylePreference === "fantasyGrand") tags.add("fantasy");
-  if (payload.stylePreference === "darkEpic") tags.add("epic");
-  if (payload.stylePreference === "warmHealing") tags.add("romance");
-  if (!tags.size) tags.add("drama");
-  return tags;
-}
-
-function pickRoleBuckets(payload) {
-  const tags = inferTagsFromSession(payload);
-  const participants = new Set();
-  const lateJoiners = new Set();
-  const observers = new Set();
-  const absent = new Set();
-
-  for (const agent of allAgents) {
-    const agentTags = new Set(agent.interestTags || []);
-    const strongMatch = [...tags].some((tag) => agentTags.has(tag));
-    const isCrew = agent.type === "crew";
-    const lateJoinProbability = Number(agent.lateJoinProbability || 0);
-
-    if (strongMatch || isCrew) {
-      if (!isCrew && Math.random() < lateJoinProbability) lateJoiners.add(agent.agentId);
-      else participants.add(agent.agentId);
-      continue;
-    }
-
-    if (agent.type === "guardian" || agent.type === "director") {
-      if (Math.random() < 0.58) observers.add(agent.agentId);
-      else absent.add(agent.agentId);
-    } else {
-      absent.add(agent.agentId);
-    }
-  }
-
-  return { participants, lateJoiners, observers, absent };
-}
-
 function setRoleBuckets(bucketSets) {
   currentRoleBuckets = bucketSets;
   if (!networkHandle) return;
   networkHandle.setRoleBuckets({
     participants: [...bucketSets.participants],
-    lateJoiners: [...bucketSets.lateJoiners],
+    lateJoiners: [],
     observers: [...bucketSets.observers],
     absent: [...bucketSets.absent]
   });
@@ -515,6 +649,15 @@ function setRoleBuckets(bucketSets) {
 function ensureActiveFromBuckets() {
   activeAgentIds.clear();
   for (const id of currentRoleBuckets.participants) activeAgentIds.add(id);
+}
+
+function countStageAuthorsAndDirectors(bucketSets) {
+  let total = 0;
+  for (const id of bucketSets.participants) {
+    const agent = allAgents.find((item) => item.agentId === id);
+    if (agent?.type === "guardian" || agent?.type === "director") total += 1;
+  }
+  return total;
 }
 
 function inferIdleTagsFromForm() {
@@ -545,32 +688,42 @@ function reportIdleStats() {
 }
 
 function renderIdleDialogueTurn() {
-  if (sessionRunning || activeChatChannel !== "idle" || !allAgents.length || !networkHandle || !idleDialogueEngine) return null;
+  if (
+    sessionRunning ||
+    activeChatChannel !== "idle" ||
+    !idleSpeechVisibleByZoom ||
+    !allAgents.length ||
+    !networkHandle ||
+    !idleDialogueEngine
+  ) {
+    return null;
+  }
   const stylePreferenceInput = document.querySelector("#style-preference");
   const round = idleDialogueEngine.nextRound({
     stylePreference: String(stylePreferenceInput?.value || "auto"),
     tags: inferIdleTagsFromForm()
   });
   if (!round) return null;
-  networkHandle.showAgentSpeech(round.speakerAId, round.lineA, { duration: 3400 });
+  networkHandle.showAgentSpeech(round.speakerAId, round.lineA, { duration: IDLE_SPEECH_DURATION_MS });
   if (idleFollowupTimer) window.clearTimeout(idleFollowupTimer);
+  const followupDelayMs = IDLE_SPEECH_DURATION_MS + IDLE_REPLY_GAP_MS;
   idleFollowupTimer = window.setTimeout(() => {
     if (sessionRunning || !networkHandle) return;
-    networkHandle.showAgentSpeech(round.speakerBId, round.lineB, { duration: 3400 });
-  }, round.replyDelayMs);
+    networkHandle.showAgentSpeech(round.speakerBId, round.lineB, { duration: IDLE_SPEECH_DURATION_MS });
+  }, followupDelayMs);
   reportIdleStats();
   return round.nextDelayMs;
 }
 
 function runIdleChatterCycle() {
-  if (sessionRunning || activeChatChannel !== "idle") return;
+  if (sessionRunning || activeChatChannel !== "idle" || !idleSpeechVisibleByZoom) return;
   const nextDelayMs = renderIdleDialogueTurn();
   const delay = Number.isFinite(nextDelayMs) ? nextDelayMs : 9000;
   idleChatterTimer = window.setTimeout(runIdleChatterCycle, delay);
 }
 
 function startIdleChatter() {
-  if (sessionRunning || activeChatChannel !== "idle") return;
+  if (sessionRunning || activeChatChannel !== "idle" || !idleSpeechVisibleByZoom) return;
   if (idleChatterTimer) window.clearTimeout(idleChatterTimer);
   runIdleChatterCycle();
 }
@@ -581,6 +734,15 @@ function stopIdleChatter() {
   idleChatterTimer = null;
   idleFollowupTimer = null;
   if (networkHandle) networkHandle.clearAllSpeech();
+}
+
+function updateIdleSpeechByZoom(zoneKey) {
+  const nextVisible = !sessionRunning && zoneKey === "directors";
+  if (nextVisible === idleSpeechVisibleByZoom) return;
+  idleSpeechVisibleByZoom = nextVisible;
+  networkHandle?.setIdleSpeechEnabled(nextVisible);
+  if (nextVisible) startIdleChatter();
+  else stopIdleChatter();
 }
 
 function updateSpotlight(agent) {
@@ -632,6 +794,17 @@ function mapPhaseByProgressText(text) {
   return "forming";
 }
 
+retryStreamBtn.addEventListener("click", async () => {
+  if (!streamRetryAction) return;
+  const action = streamRetryAction;
+  clearStreamRetryAction();
+  try {
+    await action();
+  } catch (error) {
+    renderSystemLine(`重试失败：${error.message}`);
+  }
+});
+
 function phaseLabel(phase) {
   if (phase === "collect") return "collect";
   if (phase === "analyze") return "analyze";
@@ -653,37 +826,35 @@ function updateActiveAgentsFromNames(names, leadName = null) {
   if (!allAgents.length || !networkHandle) return;
   for (const name of names || []) {
     const hit = allAgents.find((agent) => agent.name === name);
-    if (hit) {
-      if (currentRoleBuckets.lateJoiners.has(hit.agentId)) {
-        networkHandle.triggerLateJoiner(hit.agentId);
-        currentRoleBuckets.participants.add(hit.agentId);
-        currentRoleBuckets.lateJoiners.delete(hit.agentId);
-      }
-      activeAgentIds.add(hit.agentId);
+    if (!hit) continue;
+    if (!currentRoleBuckets.participants.has(hit.agentId)) {
+      continue;
     }
+    activeAgentIds.add(hit.agentId);
   }
   const ids = Array.from(activeAgentIds);
-  const leadId = allAgents.find((agent) => agent.name === leadName)?.agentId || null;
+  const leadCandidateId = allAgents.find((agent) => agent.name === leadName)?.agentId || null;
+  const leadId = leadCandidateId && currentRoleBuckets.participants.has(leadCandidateId) ? leadCandidateId : null;
   networkHandle.setActiveAgents(ids, leadId);
 }
 
+function isParticipantAgentId(agentId) {
+  if (!agentId) return false;
+  return currentRoleBuckets.participants.has(agentId);
+}
+
 function showResult(result) {
+  latestResultPayload = result || null;
+  resultTitle.textContent = "平行结局已完成";
+  resultWorkName.textContent = latestSessionTitle || "意难平剧组";
+  renderCrewNotes();
+
   const publicUrl = String(result?.publicUrl || "");
   const hasPlayableMp4 =
     publicUrl &&
     (result?.type === "video-mp4" ||
       result?.type === "video-mp4-fallback" ||
       publicUrl.toLowerCase().endsWith(".mp4"));
-  const summary = [
-    `类型: ${result?.type || "placeholder"}`,
-    `标题: ${result?.title || "未命名作品"}`,
-    publicUrl ? `播放地址: ${publicUrl}` : "",
-    "",
-    result?.text || "当前为占位成片，可接入真实视频渲染后替换。"
-  ]
-    .filter(Boolean)
-    .join("\n");
-  resultBody.textContent = summary;
   if (hasPlayableMp4) {
     resultMedia.classList.remove("is-hidden");
     resultMedia.innerHTML = `
@@ -691,8 +862,13 @@ function showResult(result) {
       <a href="${escapeHtml(publicUrl)}" target="_blank" rel="noreferrer">在新窗口打开视频</a>
     `;
   } else {
-    resultMedia.classList.add("is-hidden");
-    resultMedia.innerHTML = "";
+    resultMedia.classList.remove("is-hidden");
+    resultMedia.innerHTML = `
+      <div class="result-video-placeholder" role="status" aria-live="polite">
+        <span>VIDEO PLAYER</span>
+        <small>当前暂无可播放视频，请重新制作或稍后重试。</small>
+      </div>
+    `;
   }
   resultOverlay.classList.remove("is-hidden");
 }
@@ -722,7 +898,7 @@ async function bootstrap() {
   const agents = await normalizeAgentAvatars(fetchedAgents);
   gatewayInvocationItems = Array.isArray(gatewayInvocations) ? gatewayInvocations : [];
   renderGatewayInvocations();
-  networkCallMeta.textContent = `已发现 ${gatewayCapabilities.length} 个可调用能力`;
+  networkCallMeta.textContent = `已发现 ${gatewayCapabilities.length} 个可调用能力 · 仅显示最近 2 条关键事件`;
   networkCallStatus.textContent = "LIVE";
   networkCallStatus.classList.remove("is-failed");
   startGatewayTraceStream();
@@ -741,21 +917,18 @@ async function bootstrap() {
     onSelectAgent: (agent) => showAgentDetail(agent),
     onClearSelection: () => hideAgentDetail(),
     onZoneFocusChange: (zoneKey, zoomScale) => {
-      if (!zoneKey || zoomScale < 1.05) {
+      if (!zoneKey) {
         detailStage.textContent = activeAgentIds.size ? "当前状态：参与本轮任务" : "当前状态：空闲";
+        updateIdleSpeechByZoom(null, zoomScale);
         return;
       }
       detailStage.textContent = `当前视角：${zoneKey.toUpperCase()} (${zoomScale.toFixed(2)}x)`;
+      updateIdleSpeechByZoom(zoneKey, zoomScale);
     }
   });
+  networkHandle.setIdleSpeechEnabled(false);
   startSpotlight();
-  setRoleBuckets({
-    participants: new Set(),
-    lateJoiners: new Set(),
-    observers: new Set(),
-    absent: new Set()
-  });
-  startIdleChatter();
+  setRoleBuckets(createEmptyRoleBuckets());
 }
 
 inputOverlay.addEventListener("submit", async (event) => {
@@ -767,7 +940,9 @@ inputOverlay.addEventListener("submit", async (event) => {
     endingDirection: String(formData.get("endingDirection") || "").trim(),
     stylePreference: String(formData.get("stylePreference") || "auto")
   };
-  const sourceVideoPath = String(formData.get("sourceVideoPath") || "").trim();
+  const rawSourceVideoFile = formData.get("sourceVideoFile");
+  const sourceVideoFile =
+    rawSourceVideoFile instanceof File && rawSourceVideoFile.size > 0 ? rawSourceVideoFile : null;
 
   let payload;
   try {
@@ -778,8 +953,9 @@ inputOverlay.addEventListener("submit", async (event) => {
   }
 
   toggleOverlayCollapsed(true);
+  latestSessionTitle = payload.workTitle || "未命名作品";
   spotlightCard.classList.add("is-hidden");
-  setRoleBuckets(pickRoleBuckets(payload));
+  setRoleBuckets(pickRoleBuckets(allAgents, payload));
   ensureActiveFromBuckets();
   networkHandle.gather();
   networkHandle.setPhase("forming");
@@ -787,7 +963,7 @@ inputOverlay.addEventListener("submit", async (event) => {
   openLive(payload.workTitle);
   markTimelinePhase("collect");
   renderSystemLine("会话创建中…");
-  renderSystemLine(`参与导演 ${currentRoleBuckets.participants.size} 位，迟到候选 ${currentRoleBuckets.lateJoiners.size} 位。`);
+  renderSystemLine(`主舞台核心成员 ${countStageAuthorsAndDirectors(currentRoleBuckets)} 位。`);
 
   try {
     const { session } = await createSession(payload);
@@ -797,107 +973,171 @@ inputOverlay.addEventListener("submit", async (event) => {
     networkHandle.setPhase("discuss");
     markTimelinePhase("discuss");
 
-    await streamDiscussion(session.sessionId, (turn) => {
-      if (!sessionRunning || activeChatChannel !== "live") return;
-      if (turn.event === "turn") {
-        ensureDiscussionSection(turn.stage);
-        renderMessageLine(turn.speaker, turn.content);
-        updateActiveAgentsFromNames([turn.speaker], turn.speaker);
-        const speaker = allAgents.find((agent) => agent.name === turn.speaker);
-        if (speaker) networkHandle.showAgentSpeech(speaker.agentId, turn.content, { duration: 3600 });
-      } else if (turn.event === "topic") {
-        ensureDiscussionSection(turn.stage);
-        renderSystemLine(`${turn.title}｜${turn.goal}`);
-      } else if (turn.event === "system") {
-        ensureDiscussionSection(turn.stage);
-        renderSystemLine(turn.content);
-      } else if (turn.event === "summary") {
-        ensureDiscussionSection(turn.stage);
-        renderSummaryLine(turn.content);
-      } else if (turn.event === "done") {
-        renderSummaryLine("讨论结论已达成，剧组进入制作管线。");
-        renderSectionLine("pipeline");
-      }
-    });
+    try {
+      await streamDiscussion(session.sessionId, (turn) => {
+        if (!sessionRunning || activeChatChannel !== "live") return;
+        if (turn.event === "turn") {
+          const speakerAgent = allAgents.find((agent) => agent.name === turn.speaker);
+          const speakerAgentId = speakerAgent?.agentId || "";
+          const speakerInParticipants = isParticipantAgentId(speakerAgentId);
+          if (!speakerInParticipants) {
+            return;
+          }
+          ensureDiscussionSection(turn.stage);
+          renderMessageLine(turn.speaker, turn.content);
+          latestDiscussionTranscript.push(`${resolveSpeakerDisplayName(turn.speaker)}：${turn.content}`);
+          updateActiveAgentsFromNames([turn.speaker], turn.speaker);
+          if (speakerAgent) networkHandle.showAgentSpeech(speakerAgent.agentId, turn.content, { duration: 3600, force: true });
+        } else if (turn.event === "topic") {
+          ensureDiscussionSection(turn.stage);
+          renderSystemLine(`${turn.title}｜${turn.goal}`);
+          latestDiscussionTranscript.push(`系统｜${turn.title}：${turn.goal}`);
+        } else if (turn.event === "system") {
+          ensureDiscussionSection(turn.stage);
+          renderSystemLine(turn.content);
+          latestDiscussionTranscript.push(`系统：${turn.content}`);
+        } else if (turn.event === "summary") {
+          ensureDiscussionSection(turn.stage);
+          renderSummaryLine(turn.content);
+          latestDiscussionTranscript.push(`总结：${turn.content}`);
+        } else if (turn.event === "done") {
+          renderSummaryLine("讨论结论已达成，剧组进入制作管线。");
+          latestDiscussionTranscript.push("系统：讨论结论已达成，剧组进入制作管线。");
+          renderSectionLine("pipeline");
+        }
+      });
+    } catch (discussionError) {
+      setStreamRetryAction("重试讨论流（重新开机）", async () => {
+        inputOverlay.requestSubmit();
+      });
+      throw new Error(`讨论流中断：${discussionError.message}`);
+    }
 
-    const { job } = await createVideoJob(session.sessionId, sourceVideoPath);
+    let sourceVideoRef = "";
+    if (sourceVideoFile) {
+      renderSystemLine(`素材上传中：${sourceVideoFile.name}`);
+      const { upload } = await uploadVideoSource(sourceVideoFile);
+      renderSystemLine(`素材上传完成：${upload.originalName}`);
+      sourceVideoRef = { uploadId: upload.uploadId };
+    }
+    const { job } = await createVideoJob(session.sessionId, sourceVideoRef);
     renderSystemLine(`视频任务已创建：${job.jobId}`);
     networkHandle.setPhase("collect");
     markTimelinePhase("collect");
 
-    unsubscribeJob = watchVideoJob(job.jobId, (evt) => {
-      if (evt.event === "progress") {
-        const phase = mapPhaseByProgressText(`${evt.phase}: ${evt.message}`);
-        if (lastPhaseSection !== phase) {
-          renderSectionLine(phaseLabel(phase));
-          lastPhaseSection = phase;
+    const attachVideoStream = () => {
+      if (unsubscribeJob) unsubscribeJob();
+      unsubscribeJob = watchVideoJob(
+        job.jobId,
+        (evt) => {
+          if (evt.event === "progress") {
+            const phase = mapPhaseByProgressText(`${evt.phase}: ${evt.message}`);
+            if (lastPhaseSection !== phase) {
+              renderSectionLine(phaseLabel(phase));
+              lastPhaseSection = phase;
+            }
+            renderSystemLine(`${evt.phase}: ${evt.message}`);
+            networkHandle.setPhase(phase);
+            markTimelinePhase(phase === "forming" ? "collect" : phase);
+            return;
+          }
+          if (evt.event === "complete") {
+            clearStreamRetryAction();
+            renderSummaryLine("制作完成，正在回放平行结局。");
+            markTimelinePhase("deliver");
+            networkHandle.scatterAfterWrapup();
+            networkHandle.setActiveAgents([]);
+            window.setTimeout(() => networkHandle.release(), 7600);
+            liveOverlay.classList.add("is-fading");
+            setTimeout(() => {
+              closeLive();
+              spotlightCard.classList.remove("is-hidden");
+              showResult(evt.result);
+            }, 1400);
+            return;
+          }
+          if (evt.event === "error") {
+            renderSystemLine(evt.message || "任务事件流中断。");
+            setStreamRetryAction("重连任务流", async () => {
+              renderSystemLine("正在重连任务流…");
+              attachVideoStream();
+            });
+          }
+        },
+        {
+          onDisconnect: () => {
+            setStreamRetryAction("重连任务流", async () => {
+              renderSystemLine("正在重连任务流…");
+              attachVideoStream();
+            });
+          }
         }
-        renderSystemLine(`${evt.phase}: ${evt.message}`);
-        networkHandle.setPhase(phase);
-        markTimelinePhase(phase === "forming" ? "collect" : phase);
-      } else if (evt.event === "complete") {
-        renderSummaryLine("制作完成，正在回放平行结局。");
-        markTimelinePhase("deliver");
-        networkHandle.scatterAfterWrapup();
-        networkHandle.setActiveAgents([]);
-        window.setTimeout(() => networkHandle.release(), 7600);
-        liveOverlay.classList.add("is-fading");
-        setTimeout(() => {
-          closeLive();
-          spotlightCard.classList.remove("is-hidden");
-          showResult(evt.result);
-        }, 1400);
-      } else if (evt.event === "error") {
-        renderSystemLine(evt.message || "任务事件流中断。");
-      }
-    });
+      );
+    };
+    attachVideoStream();
   } catch (error) {
     renderSystemLine(`任务失败：${error.message}`);
     networkHandle.release();
-    networkHandle.setActiveAgents([]);
-    setRoleBuckets({
-      participants: new Set(),
-      lateJoiners: new Set(),
-      observers: new Set(),
-      absent: new Set()
-    });
-    toggleOverlayCollapsed(false);
-    idleBanner.classList.remove("is-hidden");
-    spotlightCard.classList.remove("is-hidden");
+    resetSessionUiToIdle();
     queueText.textContent = "ERROR";
   }
 });
 
 restartBtn.addEventListener("click", () => {
-  if (unsubscribeJob) unsubscribeJob();
-  resultOverlay.classList.add("is-hidden");
-  resultMedia.classList.add("is-hidden");
-  resultMedia.innerHTML = "";
-  toggleOverlayCollapsed(false);
-  idleBanner.classList.remove("is-hidden");
-  spotlightCard.classList.remove("is-hidden");
-  hideAgentDetail();
-  queueText.textContent = "STANDBY";
-  activeChatChannel = "idle";
-  activeAgentIds.clear();
-  setRoleBuckets({
-    participants: new Set(),
-    lateJoiners: new Set(),
-    observers: new Set(),
-    absent: new Set()
-  });
-  if (networkHandle) {
-    networkHandle.setActiveAgents([]);
-    networkHandle.setPhase("idle");
+  clearResultOverlay();
+  resetSessionUiToIdle();
+});
+
+resultCloseBtn.addEventListener("click", () => {
+  hideResultOverlay();
+});
+
+downloadShareBtn.addEventListener("click", async () => {
+  const publicUrl = String(latestResultPayload?.publicUrl || "");
+  if (!publicUrl) {
+    alert("当前暂无可下载或分享的视频链接。");
+    return;
   }
-  liveFeed.innerHTML = "";
-  startIdleChatter();
+  const safeUrl = publicUrl.trim();
+  const anchor = document.createElement("a");
+  anchor.href = safeUrl;
+  anchor.download = `${latestSessionTitle || "parallel-ending"}.mp4`;
+  anchor.target = "_blank";
+  anchor.rel = "noreferrer";
+  document.body.appendChild(anchor);
+  anchor.click();
+  document.body.removeChild(anchor);
+
+  let copied = false;
+  if (navigator.clipboard?.writeText) {
+    try {
+      await navigator.clipboard.writeText(safeUrl);
+      copied = true;
+    } catch {
+      copied = false;
+    }
+  }
+  if (copied) renderSystemLine("视频链接已复制到剪贴板，可直接分享。");
+});
+
+resultOverlay.addEventListener("click", (event) => {
+  if (event.target === resultOverlay) hideResultOverlay();
+});
+
+window.addEventListener("keydown", (event) => {
+  if (event.key !== "Escape") return;
+  if (resultOverlay.classList.contains("is-hidden")) return;
+  hideResultOverlay();
 });
 
 detailClose.addEventListener("click", hideAgentDetail);
 overlayToggleBtn.addEventListener("click", () => toggleOverlayCollapsed());
 zoomDirectorsBtn.addEventListener("click", () => networkHandle?.zoomToZone("directors"));
 zoomResetBtn.addEventListener("click", () => networkHandle?.resetCamera());
+networkCallToggle?.addEventListener("click", () => {
+  const collapsed = networkCallPanel?.classList.contains("is-collapsed");
+  setNetworkCallPanelCollapsed(!collapsed);
+});
 loadDemoBtn.addEventListener("click", () => {
   const workTitleInput = document.querySelector("#work-title");
   const endingDirectionInput = document.querySelector("#ending-direction");
@@ -905,7 +1145,7 @@ loadDemoBtn.addEventListener("click", () => {
   workTitleInput.value = "哈利波特与凤凰社";
   endingDirectionInput.value = "小天狼星在神秘事务司被救下，最终和哈利拥抱和解。";
   stylePreferenceInput.value = "warmHealing";
-  sourceVideoPathInput.value = "";
+  sourceVideoFileInput.value = "";
 });
 
 bootstrap();

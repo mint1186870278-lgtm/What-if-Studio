@@ -7,7 +7,7 @@
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
-    "lint": "node --check src/main.js && node --check src/api.js && node --check src/network.js && node --check src/displayNames.js && node --check src/idleDialogueEngine.js",
+    "lint": "eslint \"src/**/*.js\" \"test/**/*.js\"",
     "test": "node --test"
   },
   "dependencies": {
@@ -15,6 +15,9 @@
     "d3": "^7.9.0"
   },
   "devDependencies": {
+    "@eslint/js": "^9.39.0",
+    "eslint": "^9.39.0",
+    "globals": "^16.4.0",
     "vite": "^7.1.12"
   }
 }
