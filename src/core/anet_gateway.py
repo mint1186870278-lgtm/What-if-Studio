@@ -1,9 +1,8 @@
-"""ANet gateway wrapper — proper integration with anet SDK.
+"""ANet gateway wrapper for exposing whatif-studio services to ANet peers.
 
-Three-tier fallback:
-  1. Local AutoGen dispatch (always tried first)
-  2. ANet P2P mesh (via anet SDK + daemon)
-  3. Mocked response (last resort)
+This module does not replace AutoGen orchestration. AutoGen handles
+multi-director discussion and script generation inside the product flow,
+while this gateway packages backend capabilities as ANet-callable services.
 
 Usage
 -----
@@ -41,7 +40,11 @@ def _probe_sdk() -> tuple[Any, bool]:
         logger.info("anet-sdk not installed; ANet P2P disabled")
         return None, False
 
-    client = SvcClient()
+    try:
+        client = SvcClient()
+    except Exception as exc:
+        logger.info("ANet client unavailable (token/daemon not ready): %s", exc)
+        return None, False
     # Probe daemon health
     try:
         import httpx
@@ -171,7 +174,7 @@ async def call_service(
     service_name: str,
     payload: dict[str, Any],
 ) -> dict[str, Any]:
-    """Invoke a service through the three-tier fallback.
+    """Invoke a service through local handlers first, then ANet mesh if needed.
 
     Parameters
     ----------
@@ -183,7 +186,8 @@ async def call_service(
     Returns
     -------
     dict
-        Response from the first tier that succeeded, or a ``mocked`` envelope.
+        Response from local handler or ANet peer; when neither is available,
+        a mocked envelope is returned for non-crashing behavior.
     """
     # ── Tier 1: local AutoGen dispatch ──
     try:

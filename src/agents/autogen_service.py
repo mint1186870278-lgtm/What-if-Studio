@@ -5,16 +5,18 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-import os
+from pathlib import Path
 from typing import Any, AsyncGenerator
+from src.config import settings
 
 logger = logging.getLogger(__name__)
 
 try:
     from autogen_agentchat.agents import AssistantAgent
     from autogen_agentchat.base import TaskResult
-    from autogen_agentchat.conditions import MaxMessageTermination, TextMentionTermination
-    from autogen_agentchat.teams import SelectorGroupChat
+    from autogen_agentchat.conditions import MaxMessageTermination
+    from autogen_agentchat.teams import RoundRobinGroupChat
+    from autogen_core.models import ModelFamily
     from autogen_ext.models.openai import OpenAIChatCompletionClient
 
     AUTOGEN_AVAILABLE = True
@@ -22,106 +24,181 @@ except Exception as exc:  # pragma: no cover
     AUTOGEN_AVAILABLE = False
     AUTOGEN_IMPORT_ERROR = exc
 
-from src.core.discussion_engine import discussion_engine
+
+def _infer_model_info(model_name: str) -> dict[str, Any] | None:
+    """Return model_info for non-OpenAI-compatible model names."""
+    name = (model_name or "").lower()
+    openai_prefixes = ("gpt-", "o1", "o3", "o4")
+    if name.startswith(openai_prefixes):
+        return None
+    # Compatible defaults for OpenAI-like gateways (DeepSeek, etc.)
+    family = ModelFamily.R1 if "deepseek" in name and "r1" in name else ModelFamily.UNKNOWN
+    return {
+        "vision": False,
+        "function_calling": False,
+        "json_output": True,
+        "structured_output": True,
+        "family": family,
+    }
+
+
+def _load_agent_catalog() -> dict[str, dict[str, Any]]:
+    repo_root = Path(__file__).resolve().parents[2]
+    candidates = [
+        repo_root / "web" / "public" / "mock" / "agents.json",
+        repo_root / "web" / "dist" / "mock" / "agents.json",
+    ]
+    for path in candidates:
+        if path.exists():
+            with path.open("r", encoding="utf-8") as f:
+                raw = json.load(f)
+            if isinstance(raw, list):
+                return {str(item.get("agentId")): item for item in raw if isinstance(item, dict) and item.get("agentId")}
+    return {}
+
+
+def _agent_label(agent_map: dict[str, dict[str, Any]], agent_id: str, default_name: str) -> str:
+    item = agent_map.get(agent_id, {})
+    return str(item.get("name") or default_name)
+
+
+def _py_name(agent_id: str) -> str:
+    return agent_id.replace("-", "_")
 
 
 def _autogen_ready() -> bool:
-    return AUTOGEN_AVAILABLE and bool(os.getenv("OPENAI_API_KEY") or os.getenv("LLM_API_KEY"))
+    return AUTOGEN_AVAILABLE and bool(settings.openai_api_key)
 
 
 def _model_client() -> "OpenAIChatCompletionClient":
+    model_name = settings.openai_model or "gpt-4o-mini"
+    base_url = settings.openai_base_url or "https://api.openai.com/v1"
+    kwargs: dict[str, Any] = {
+        "model": model_name,
+        "api_key": settings.openai_api_key,
+        "base_url": base_url,
+        "temperature": 0.7,
+    }
+    model_info = _infer_model_info(model_name)
+    if model_info is not None:
+        kwargs["model_info"] = model_info
     return OpenAIChatCompletionClient(
-        model=os.getenv("AUTOGEN_MODEL", os.getenv("DEBATE_MODEL", "gpt-4o-mini")),
-        api_key=os.getenv("OPENAI_API_KEY", os.getenv("LLM_API_KEY")),
-        base_url=os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1"),
-        temperature=0.7,
+        **kwargs,
     )
 
 
 def _build_team() -> tuple[Any, Any]:
     client = _model_client()
+    agent_map = _load_agent_catalog()
+
+    narrative_id = "agent-yates"
+    visual_id = "agent-columbus"
+    sound_id = "agent-jackson"
+    material_id = "agent-collector"
+    critic_id = "agent-rowling"
+
+    id_by_py_name = {
+        _py_name(narrative_id): narrative_id,
+        _py_name(visual_id): visual_id,
+        _py_name(sound_id): sound_id,
+        _py_name(material_id): material_id,
+        _py_name(critic_id): critic_id,
+    }
+
     participants = [
         AssistantAgent(
-            name="NarrativeDirector",
-            description="Decides whether to join and focuses on story logic.",
+            name=_py_name(narrative_id),
+            description=f"{_agent_label(agent_map, narrative_id, 'Narrative Director')} decides whether to join and focuses on story logic.",
             model_client=client,
             system_message=(
-                "You are the NarrativeDirector. First decide whether this topic interests you. "
-                "If not, briefly decline. If yes, join the debate and focus on story logic, causality, "
+                "You are the NarrativeDirector. Your first response MUST start with either 'JOIN:' or 'SKIP:'. "
+                "If SKIP, give one concise reason and stop. If JOIN, continue in later turns and focus on story logic, causality, "
                 "and emotional payoff. Keep replies concise."
             ),
-            model_client_stream=False,
+            model_client_stream=True,
         ),
         AssistantAgent(
-            name="VisualDirector",
-            description="Focuses on editing, shot rhythm, and visual structure.",
+            name=_py_name(visual_id),
+            description=f"{_agent_label(agent_map, visual_id, 'Visual Director')} focuses on editing, shot rhythm, and visual structure.",
             model_client=client,
             system_message=(
-                "You are the VisualDirector. First decide whether to join. If you join, debate the edit, "
+                "You are the VisualDirector. Your first response MUST start with either 'JOIN:' or 'SKIP:'. "
+                "If SKIP, give one concise reason and stop. If JOIN, debate the edit, "
                 "shot rhythm, composition, and scene continuity. When the discussion turns to division of labor, "
                 "own the editing part. Keep replies concise."
             ),
-            model_client_stream=False,
+            model_client_stream=True,
         ),
         AssistantAgent(
-            name="SoundDirector",
-            description="Focuses on audio, score, and sound design.",
+            name=_py_name(sound_id),
+            description=f"{_agent_label(agent_map, sound_id, 'Sound Director')} focuses on audio, score, and sound design.",
             model_client=client,
             system_message=(
-                "You are the SoundDirector. First decide whether to join. If you join, debate audio design, "
+                "You are the SoundDirector. Your first response MUST start with either 'JOIN:' or 'SKIP:'. "
+                "If SKIP, give one concise reason and stop. If JOIN, debate audio design, "
                 "score, silence, and emotional pacing. When the discussion turns to division of labor, "
                 "own the audio part. Keep replies concise."
             ),
-            model_client_stream=False,
+            model_client_stream=True,
         ),
         AssistantAgent(
-            name="MaterialDirector",
-            description="Focuses on materials and asset selection.",
+            name=_py_name(material_id),
+            description=f"{_agent_label(agent_map, material_id, 'Material Director')} focuses on materials and asset selection.",
             model_client=client,
             system_message=(
-                "You are the MaterialDirector. First decide whether to join. If you join, debate what materials "
+                "You are the MaterialDirector. Your first response MUST start with either 'JOIN:' or 'SKIP:'. "
+                "If SKIP, give one concise reason and stop. If JOIN, debate what materials "
                 "or assets are needed and which project assets should be selected. When the discussion turns to "
                 "division of labor, own the material selection part. Keep replies concise."
             ),
-            model_client_stream=False,
+            model_client_stream=True,
         ),
         AssistantAgent(
-            name="Critic",
-            description="Synthesizes the debate into a final markdown script.",
+            name=_py_name(critic_id),
+            description=f"{_agent_label(agent_map, critic_id, 'Critic')} synthesizes the debate into a final markdown script.",
             model_client=client,
             system_message=(
                 "You are the Critic. Synthesize the debate into one large Markdown script with three sections: "
                 "editing, audio, and materials. End your final response with FINAL_JSON and a single JSON object "
                 "with keys final_script, edit_instructions, audio_design, material_selection, new_shot_description."
             ),
-            model_client_stream=False,
+            model_client_stream=True,
         ),
     ]
-    selector_prompt = (
-        "You are moderating a film discussion. Available participants:\n"
-        "{roles}\n\n"
-        "Conversation history:\n{history}\n\n"
-        "Choose exactly one next speaker by name. Prefer the specialist best suited to the current phase. "
-        "When the debate has converged, choose Critic."
-    )
-    termination = TextMentionTermination("FINAL_JSON") | MaxMessageTermination(max_messages=24)
-    team = SelectorGroupChat(
+    termination = MaxMessageTermination(max_messages=18)
+    team = RoundRobinGroupChat(
         participants=participants,
-        model_client=client,
-        selector_prompt=selector_prompt,
         termination_condition=termination,
-        allow_repeated_speaker=True,
     )
-    return client, team
+    return client, team, id_by_py_name
 
 
-def _message_to_event(message: Any) -> dict[str, Any]:
+def _message_to_event(message: Any, id_by_py_name: dict[str, str] | None = None) -> dict[str, Any]:
     content = getattr(message, "content", "")
     source = getattr(message, "source", None) or getattr(message, "name", None) or "system"
+    if id_by_py_name and isinstance(source, str):
+        source = id_by_py_name.get(source, source)
     if not isinstance(content, str):
         content = json.dumps(content, ensure_ascii=False)
     return {
         "type": "turn",
+        "speaker": source,
+        "role": source,
+        "content": content,
+        "stage": "debate",
+        "ts": int(asyncio.get_running_loop().time() * 1000),
+    }
+
+
+def _chunk_to_event(message: Any, id_by_py_name: dict[str, str] | None = None) -> dict[str, Any]:
+    source = getattr(message, "source", None) or getattr(message, "name", None) or "system"
+    if id_by_py_name and isinstance(source, str):
+        source = id_by_py_name.get(source, source)
+    content = getattr(message, "content", "")
+    if not isinstance(content, str):
+        content = str(content or "")
+    return {
+        "type": "turn_chunk",
         "speaker": source,
         "role": source,
         "content": content,
@@ -162,37 +239,18 @@ async def run_autogen_discussion_stream(
     """Stream the multi-director discussion as JSON-ready events."""
 
     if not _autogen_ready():
-        turns, script = discussion_engine.generate_timeline(user_request, style)
-        if performance_notes:
-            script += f"\n\n## 性能备注\n{performance_notes}\n"
-        for turn in turns:
-            yield {
-                "type": "turn",
-                "speaker": turn.speaker,
-                "role": turn.role,
-                "content": turn.content,
-                "stage": turn.stage,
-                "ts": turn.ts,
-            }
-        yield {
-            "type": "script",
-            "script": script,
-            "final": {
-                "final_script": script,
-                "edit_instructions": "",
-                "audio_design": "",
-                "material_selection": "",
-                "new_shot_description": "",
-            },
-        }
-        return
+        if not AUTOGEN_AVAILABLE:
+            reason = f"autogen package not available: {repr(globals().get('AUTOGEN_IMPORT_ERROR', 'unknown'))}"
+        else:
+            reason = "OPENAI_API_KEY missing in loaded settings"
+        raise RuntimeError(f"AutoGen discussion is unavailable: {reason}")
 
-    client, team = _build_team()
+    client, team, id_by_py_name = _build_team()
     task = (
         f"User request: {user_request}\n"
         f"Style: {style}\n"
         f"Performance notes: {performance_notes or ''}\n\n"
-        "Phase 1: each director decides whether they are interested and should join.\n"
+        "Phase 1: each director must output one decision line starting with JOIN: or SKIP:.\n"
         "Phase 2: joined directors debate the edit plan, sound plan, and materials.\n"
         "Phase 3: divide work into editing, audio, and material selection.\n"
         "Phase 4: Critic synthesizes everything into a single large Markdown script and ends with FINAL_JSON."
@@ -201,24 +259,44 @@ async def run_autogen_discussion_stream(
     final_text = ""
     try:
         async for message in team.run_stream(task=task):  # type: ignore[arg-type]
+            message_type = str(getattr(message, "type", ""))
+            if message_type == "ModelClientStreamingChunkEvent":
+                chunk_event = _chunk_to_event(message, id_by_py_name=id_by_py_name)
+                if chunk_event.get("speaker") != "user" and chunk_event.get("content"):
+                    yield chunk_event
+                continue
             if isinstance(message, TaskResult):
-                final_text = "\n".join(
+                # Prefer the final Critic response; avoid falling back to the initial user prompt.
+                critic_candidates = [
                     str(getattr(msg, "content", ""))
                     for msg in message.messages
-                    if getattr(msg, "content", None)
-                )
+                    if id_by_py_name.get(str(getattr(msg, "source", "") or getattr(msg, "name", "")), "") == "agent-rowling"
+                    and getattr(msg, "content", None)
+                ]
+                if critic_candidates:
+                    final_text = critic_candidates[-1]
+                else:
+                    final_text = "\n".join(
+                        str(getattr(msg, "content", ""))
+                        for msg in message.messages
+                        if getattr(msg, "content", None)
+                    )
                 yield {
                     "type": "task_result",
                     "stop_reason": message.stop_reason,
                 }
                 continue
-            event = _message_to_event(message)
+            event = _message_to_event(message, id_by_py_name=id_by_py_name)
+            if event.get("speaker") == "user":
+                continue
             yield event
             if "FINAL_JSON" in event.get("content", ""):
                 final_text = event["content"]
     finally:
         await client.close()
 
+    if not final_text:
+        final_text = ""
     final = _parse_final_json(final_text)
     yield {
         "type": "script",

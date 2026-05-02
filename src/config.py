@@ -2,12 +2,17 @@
 
 import os
 from pathlib import Path
-from pydantic_settings import BaseSettings
+from pydantic_settings import BaseSettings, SettingsConfigDict
 from pydantic import field_validator
 
 
 class Settings(BaseSettings):
     """Application settings"""
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        env_file_encoding="utf-8",
+        extra="ignore",
+    )
 
     # Database
     database_url: str = os.getenv("DATABASE_URL", "sqlite:///./whatif.db")
@@ -37,10 +42,10 @@ class Settings(BaseSettings):
     host: str = os.getenv("HOST", "0.0.0.0")
     port: int = int(os.getenv("PORT", "8000"))
     frontend_dist_dir: Path = Path(os.getenv("FRONTEND_DIST_DIR", "./web/dist"))
-
-    class Config:
-        env_file = ".env"
-        env_file_encoding = "utf-8"
+    anet_token: str = os.getenv("ANET_TOKEN", "")
+    openai_api_key: str = os.getenv("OPENAI_API_KEY", "")
+    openai_base_url: str = os.getenv("OPENAI_BASE_URL", "")
+    openai_model: str = os.getenv("OPENAI_MODEL", os.getenv("AUTOGEN_MODEL", ""))
 
     @field_validator("debug", mode="before")
     @classmethod
@@ -58,6 +63,20 @@ class Settings(BaseSettings):
         """Create storage directories if they don't exist"""
         self.storage_projects_path.mkdir(parents=True, exist_ok=True)
         self.storage_temp_path.mkdir(parents=True, exist_ok=True)
+
+    def validate_openai_env(self) -> None:
+        required = {
+            "OPENAI_API_KEY": self.openai_api_key,
+            "OPENAI_BASE_URL": self.openai_base_url,
+            "OPENAI_MODEL": self.openai_model,
+        }
+        missing = [name for name, value in required.items() if not str(value or "").strip()]
+        if missing:
+            missing_text = ", ".join(missing)
+            raise RuntimeError(
+                f"Missing required OpenAI environment variables: {missing_text}. "
+                "Please set them in .env before starting the server."
+            )
 
 
 # Global settings instance

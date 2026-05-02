@@ -164,6 +164,7 @@ async def _generate_project_discussion_stream(project: Project, db: Session):
     script = ""
     project.discussion_status = "running"
     db.commit()
+    yield f"data: {json.dumps({'type': 'system', 'content': 'discussion_started'}, ensure_ascii=False)}\n\n"
     try:
         async for event in run_autogen_discussion_stream(
             user_request=project.prompt or "",
@@ -183,6 +184,7 @@ async def _generate_project_discussion_stream(project: Project, db: Session):
     except Exception as exc:
         project.discussion_status = "failed"
         db.commit()
+        logger.exception("Project discussion failed: project_id=%s", project.id)
         yield f"data: {json.dumps({'type': 'error', 'message': str(exc)}, ensure_ascii=False)}\n\n"
 
 

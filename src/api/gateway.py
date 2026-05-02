@@ -1,11 +1,14 @@
 """Gateway API routes: list services, invoke agents, and invocation logs/SSE."""
 
+import asyncio
 import json
 import logging
+from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Body
 from pydantic import BaseModel
 from fastapi.responses import StreamingResponse
+from sqlalchemy import and_
 from sqlalchemy.orm import Session as DBSession
 
 from src.db import get_db
@@ -115,18 +118,26 @@ async def list_invocations(limit: int = 100, db: DBSession = Depends(get_db)):
 
 
 async def invocations_stream(db: DBSession):
-    """Simple SSE stream that polls for new invocations. In production, use
-    better eventing (Redis, Kafka, DB LISTENER)."""
-    import time
-
-    last_seen = None
+    """SSE stream for new invocation rows using incremental polling."""
+    last_seen_ts: datetime | None = None
+    last_seen_id: str | None = None
     while True:
-        items = db.query(ANetInvocation).order_by(ANetInvocation.timestamp.asc()).all()
-        new_items = []
+        query = db.query(ANetInvocation)
+        if last_seen_ts is not None:
+            query = query.filter(
+                and_(
+                    ANetInvocation.timestamp >= last_seen_ts,
+                )
+            )
+        items = query.order_by(ANetInvocation.timestamp.asc(), ANetInvocation.id.asc()).limit(100).all()
+        emitted = False
         for i in items:
-            if last_seen is None or i.timestamp.isoformat() > last_seen:
-                new_items.append(i)
-        for i in new_items:
+            if last_seen_ts is not None:
+                same_ts = i.timestamp == last_seen_ts
+                if i.timestamp < last_seen_ts:
+                    continue
+                if same_ts and last_seen_id is not None and str(i.id) <= str(last_seen_id):
+                    continue
             data = {
                 "id": i.id,
                 "service_name": i.service_name,
@@ -134,8 +145,11 @@ async def invocations_stream(db: DBSession):
                 "timestamp": i.timestamp.isoformat(),
             }
             yield f"data: {json.dumps(data)}\n\n"
-            last_seen = i.timestamp.isoformat()
-        time.sleep(1)
+            emitted = True
+            last_seen_ts = i.timestamp
+            last_seen_id = str(i.id)
+        if not emitted:
+            await asyncio.sleep(1)
 
 
 @router.get("/gateway/invocations/events")

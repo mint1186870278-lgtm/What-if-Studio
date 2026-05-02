@@ -13,8 +13,24 @@ function safeNodeId(text) {
 
 function compactSpeech(text) {
   const trimmed = String(text || "").replace(/\s+/g, " ").trim();
-  if (trimmed.length <= 26) return trimmed;
-  return `${trimmed.slice(0, 25)}...`;
+  if (!trimmed) return "";
+  if (trimmed.length <= 100) return trimmed;
+  return trimmed.slice(-100);
+}
+
+function splitSpeechLines(text, maxLineChars = 24, maxLines = 4) {
+  const raw = compactSpeech(text);
+  if (!raw) return [""];
+  const lines = [];
+  for (let i = 0; i < raw.length; i += maxLineChars) {
+    lines.push(raw.slice(i, i + maxLineChars));
+    if (lines.length >= maxLines) break;
+  }
+  if (raw.length > maxLineChars * maxLines) {
+    const last = lines[lines.length - 1];
+    lines[lines.length - 1] = `${last.slice(0, Math.max(0, last.length - 1))}…`;
+  }
+  return lines;
 }
 
 export function createNetwork(svgElement, agents, handlers = {}) {
@@ -254,8 +270,11 @@ export function createNetwork(svgElement, agents, handlers = {}) {
 
   const speechByAgent = new Map();
   const speechTimerByAgent = new Map();
+  const speechTextByAgent = new Map();
+  let currentSpeakerAgentId = null;
   speechGroup.each((d, index, groups) => {
     speechByAgent.set(d.agentId, d3.select(groups[index]));
+    speechTextByAgent.set(d.agentId, "");
   });
 
   const runtimeLinks = linkLayer
@@ -638,12 +657,41 @@ export function createNetwork(svgElement, agents, handlers = {}) {
     if (!idleSpeechEnabled && !options.force) return;
     const bubble = speechByAgent.get(agentId);
     if (!bubble) return;
-    const duration = Number(options.duration || 2800);
-    const line = compactSpeech(content);
-    const width = Math.max(90, Math.min(230, line.length * 10 + 26));
-    bubble.select(".agent-speech-bg").attr("width", width);
+    const duration = Number(options.duration || 30000);
+    const append = options.append !== false;
+    const previous = speechTextByAgent.get(agentId) || "";
+    const incoming = String(content || "").replace(/\s+/g, " ").trim();
+    const merged = append && previous ? `${previous} ${incoming}` : incoming;
+    const normalized = compactSpeech(merged);
+    speechTextByAgent.set(agentId, normalized);
+    const lines = splitSpeechLines(normalized);
+    const maxLine = lines.reduce((acc, line) => Math.max(acc, line.length), 0);
+    const width = Math.max(116, Math.min(300, maxLine * 9 + 28));
+    const height = Math.max(24, 10 + lines.length * 14);
+    bubble.select(".agent-speech-bg").attr("width", width).attr("height", height).attr("y", -(height + 12));
     bubble.select(".agent-speech-tail").attr("d", "M25,-12 L20,-6 L30,-12");
-    bubble.select(".agent-speech-text").text(line);
+    const text = bubble.select(".agent-speech-text");
+    text.selectAll("tspan").remove();
+    lines.forEach((line, idx) => {
+      text
+        .append("tspan")
+        .attr("x", 20)
+        .attr("dy", idx === 0 ? (-(height - 8)) : 14)
+        .text(line);
+    });
+
+    // Keep only one active speaker bubble visible until the next speaker talks.
+    if (currentSpeakerAgentId && currentSpeakerAgentId !== agentId) {
+      const prevBubble = speechByAgent.get(currentSpeakerAgentId);
+      if (prevBubble) {
+        prevBubble.interrupt();
+        prevBubble.attr("opacity", 0).attr("display", "none");
+      }
+      const prevTimer = speechTimerByAgent.get(currentSpeakerAgentId);
+      if (prevTimer) window.clearTimeout(prevTimer);
+      speechTimerByAgent.delete(currentSpeakerAgentId);
+    }
+    currentSpeakerAgentId = agentId;
     bubble.attr("display", null).transition().duration(180).attr("opacity", 1);
 
     const prevTimer = speechTimerByAgent.get(agentId);
@@ -655,6 +703,7 @@ export function createNetwork(svgElement, agents, handlers = {}) {
         .attr("opacity", 0)
         .on("end", () => bubble.attr("display", "none"));
       speechTimerByAgent.delete(agentId);
+      if (currentSpeakerAgentId === agentId) currentSpeakerAgentId = null;
     }, duration);
     speechTimerByAgent.set(agentId, timer);
   }
@@ -666,6 +715,8 @@ export function createNetwork(svgElement, agents, handlers = {}) {
       bubble.interrupt();
       bubble.attr("opacity", 0).attr("display", "none");
     }
+    for (const key of speechTextByAgent.keys()) speechTextByAgent.set(key, "");
+    currentSpeakerAgentId = null;
   }
 
   function setIdleSpeechEnabled(enabled) {

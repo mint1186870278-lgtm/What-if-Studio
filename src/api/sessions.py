@@ -83,10 +83,10 @@ async def generate_discussion_stream(
         if not session:
             yield f"data: {json.dumps({'error': 'Session not found'})}\n\n"
             return
+        project = db.query(Project).filter(Project.id == session.project_id).first()
 
         turns = []
         script = ""
-        final = {}
 
         async for event in run_autogen_discussion_stream(
             user_request=session.prompt,
@@ -97,21 +97,31 @@ async def generate_discussion_stream(
                 turns.append(event)
             elif event.get("type") == "script":
                 script = str(event.get("script", ""))
-                final = dict(event.get("final", {}))
 
+        if not script.strip():
+            raise RuntimeError("AutoGen completed without a valid script.")
         session.script = script
         session.discussion_history = turns
-        db.commit()
-
-        # Mark session as completed
         session.status = "completed"
+        if project is not None:
+            project.script = script
+            project.discussion_history = turns
+            project.discussion_status = "completed"
         db.commit()
 
         logger.info(f"✅ Discussion stream completed for session {session_id}")
 
     except Exception as e:
+        failed_session = db.query(Session).filter(Session.id == session_id).first()
+        if failed_session:
+            failed_session.status = "failed"
+        if failed_session and failed_session.project_id:
+            failed_project = db.query(Project).filter(Project.id == failed_session.project_id).first()
+            if failed_project:
+                failed_project.discussion_status = "failed"
+        db.commit()
         logger.error(f"❌ Discussion stream error: {e}")
-        yield f"data: {json.dumps({'error': str(e)})}\n\n"
+        yield f"data: {json.dumps({'type': 'error', 'message': str(e)}, ensure_ascii=False)}\n\n"
 
 
 @router.get("/sessions/{session_id}/stream")

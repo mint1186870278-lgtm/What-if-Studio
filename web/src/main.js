@@ -3,16 +3,12 @@ import { parseCreativeSession } from "./sessionSchema";
 import { createNetwork } from "./network";
 import {
   createProject,
-  createSession,
-  createVideoJob,
+  createProjectVideoJob,
   fetchAgents,
-  fetchGatewayCapabilities,
-  fetchGatewayInvocations,
   getProject,
-  streamDiscussion,
+  streamProjectDiscussion,
   uploadVideoSource,
   updateProject,
-  watchGatewayInvocations,
   watchVideoJob
 } from "./api";
 import { getDisplayName } from "./displayNames";
@@ -21,6 +17,8 @@ import { createEmptyRoleBuckets, inferTagsFromSession, pickRoleBuckets } from ".
 
 const IDLE_SPEECH_DURATION_MS = 3200;
 const IDLE_REPLY_GAP_MS = 3000;
+const DISCUSSION_PLAYBACK_MIN_DELAY_MS = 520;
+const DISCUSSION_PLAYBACK_MAX_DELAY_MS = 1300;
 
 const app = document.querySelector("#app");
 
@@ -79,25 +77,6 @@ app.innerHTML = `
         <span id="queue-text">STANDBY</span>
       </div>
 
-      <aside id="network-call-panel" class="network-call-panel is-collapsed">
-        <div class="network-call-head">
-          <span class="network-call-title">Agent Network</span>
-          <div class="network-call-actions">
-            <span id="network-call-status" class="network-call-status">SYNCING</span>
-            <button
-              type="button"
-              id="network-call-toggle"
-              class="network-call-toggle"
-              aria-expanded="false"
-              aria-label="展开 Agent Network 面板"
-            >
-              展开
-            </button>
-          </div>
-        </div>
-        <div class="network-call-meta" id="network-call-meta">加载能力目录中…</div>
-        <div class="network-call-feed" id="network-call-feed"></div>
-      </aside>
 
       <div id="live-overlay" class="live-overlay is-hidden">
         <div class="live-overlay-header">
@@ -216,11 +195,6 @@ const detailStage = document.querySelector("#detail-stage");
 const detailSummary = document.querySelector("#detail-summary");
 const detailClose = document.querySelector("#agent-detail-close");
 const queueText = document.querySelector("#queue-text");
-const networkCallPanel = document.querySelector("#network-call-panel");
-const networkCallFeed = document.querySelector("#network-call-feed");
-const networkCallMeta = document.querySelector("#network-call-meta");
-const networkCallStatus = document.querySelector("#network-call-status");
-const networkCallToggle = document.querySelector("#network-call-toggle");
 const phaseTimeline = document.querySelector("#phase-timeline");
 const loadDemoBtn = document.querySelector("#load-demo-btn");
 const overlayToggleBtn = document.querySelector("#overlay-toggle-btn");
@@ -250,9 +224,6 @@ let lastIdleStatsSnapshot = null;
 let overlayCollapsed = false;
 let sessionRunning = false;
 let activeChatChannel = "idle";
-let stopGatewayWatch = null;
-let gatewayReconnectTimer = null;
-let gatewayInvocationItems = [];
 let streamRetryAction = null;
 let currentRoleBuckets = createEmptyRoleBuckets();
 let idleSpeechVisibleByZoom = false;
@@ -261,6 +232,10 @@ let latestSessionTitle = "";
 let latestDiscussionTranscript = [];
 let activeProjectId = null;
 let latestGeneratedScript = "";
+let scriptReviewOpenedAtMs = 0;
+let discussionPlaybackQueue = [];
+let discussionPlaybackDone = false;
+const discussionChunkBySpeaker = new Map();
 
 function setProjectQuery(projectId) {
   const url = new URL(window.location.href);
@@ -290,6 +265,7 @@ async function loadProjectFromQuery() {
 }
 
 function openScriptReview(scriptText) {
+  scriptReviewOpenedAtMs = Date.now();
   scriptReviewContent.textContent = scriptText || "暂无脚本";
   scriptReviewProgress.textContent = "讨论完成，等待确认生成视频";
   scriptReviewVideo.classList.add("is-hidden");
@@ -311,6 +287,7 @@ function waitForGenerateConfirm() {
     };
     const onClose = () => {
       cleanup();
+      closeScriptReview();
       reject(new Error("已取消生成"));
     };
     function cleanup() {
@@ -320,67 +297,6 @@ function waitForGenerateConfirm() {
     scriptReviewGenerateBtn.addEventListener("click", onConfirm);
     scriptReviewCloseBtn.addEventListener("click", onClose);
   });
-}
-
-function setNetworkCallPanelCollapsed(collapsed) {
-  networkCallPanel?.classList.toggle("is-collapsed", collapsed);
-  if (!networkCallToggle) return;
-  networkCallToggle.textContent = collapsed ? "展开" : "收起";
-  networkCallToggle.setAttribute("aria-expanded", collapsed ? "false" : "true");
-  networkCallToggle.setAttribute("aria-label", collapsed ? "展开 Agent Network 面板" : "折叠 Agent Network 面板");
-}
-
-function isKeyGatewayInvocation(item) {
-  const status = String(item?.status || "").toLowerCase();
-  const durationMs = Number(item?.durationMs || 0);
-  return status === "failed" || status === "error" || Boolean(item?.fallbackFromCapabilityId) || durationMs >= 1200;
-}
-
-function formatGatewayStatus(status) {
-  const normalized = String(status || "").toLowerCase();
-  if (normalized === "ok") return "成功";
-  if (normalized === "failed" || normalized === "error") return "失败";
-  if (normalized === "calling") return "调用中";
-  return normalized || "unknown";
-}
-
-function renderGatewayInvocations() {
-  const recentItems = gatewayInvocationItems.slice(0, 16);
-  const keyItems = recentItems.filter((item) => isKeyGatewayInvocation(item)).slice(0, 2);
-  const items = keyItems.length ? keyItems : recentItems.slice(0, 2);
-  if (!items.length) {
-    networkCallFeed.innerHTML = `<div class="network-call-empty">暂无关键事件</div>`;
-    return;
-  }
-  networkCallFeed.innerHTML = items
-    .map((item) => {
-      const normalizedStatus = String(item.status || "").toLowerCase();
-      const statusClass = normalizedStatus === "failed" || normalizedStatus === "error" ? "is-failed" : "is-ok";
-      const fallbackBadge = item.fallbackFromCapabilityId
-        ? `<span class="network-call-badge">fallback</span>`
-        : "";
-      const capability = escapeHtml(item.capabilityId || "unknown-capability");
-      const caller = escapeHtml(item.caller || "unknown");
-      const target = escapeHtml(item.targetServiceId || "unresolved");
-      const statusLabel = formatGatewayStatus(item.status);
-      return `
-        <article class="network-call-item ${statusClass}">
-          <div class="network-call-capability">${capability}</div>
-          <div class="network-call-route">${caller} → ${target}</div>
-          <div class="network-call-foot">
-            <span>${statusLabel} · ${Number(item.durationMs || 0)}ms</span>
-            ${fallbackBadge}
-          </div>
-        </article>
-      `;
-    })
-    .join("");
-}
-
-function pushGatewayInvocation(item) {
-  if (!item || typeof item !== "object") return;
-  gatewayInvocationItems = [item, ...gatewayInvocationItems].slice(0, 40);
-  renderGatewayInvocations();
 }
 
 function clearStreamRetryAction() {
@@ -393,39 +309,6 @@ function setStreamRetryAction(label, action) {
   streamRetryAction = typeof action === "function" ? action : null;
   retryStreamBtn.textContent = label || "重试流连接";
   retryStreamBtn.classList.toggle("is-hidden", !streamRetryAction);
-}
-
-function startGatewayTraceStream() {
-  if (stopGatewayWatch) stopGatewayWatch();
-  stopGatewayWatch = watchGatewayInvocations(
-    (event) => {
-      if (event?.event === "error") {
-        networkCallStatus.textContent = "DEGRADED";
-        networkCallStatus.classList.add("is-failed");
-        return;
-      }
-      networkCallStatus.textContent = "LIVE";
-      networkCallStatus.classList.remove("is-failed");
-      const from = String(event?.from || event?.caller || "").trim();
-      const to = String(event?.to || event?.targetServiceId || "").trim();
-      if (from && to && networkHandle?.flashLink) {
-        networkHandle.flashLink(from, to, {
-          status: String(event?.status || ""),
-          duration: event?.status === "calling" ? 1500 : 1200
-        });
-      }
-      pushGatewayInvocation(event);
-    },
-    {
-      onDisconnect: () => {
-        if (gatewayReconnectTimer) return;
-        gatewayReconnectTimer = window.setTimeout(() => {
-          gatewayReconnectTimer = null;
-          startGatewayTraceStream();
-        }, 2000);
-      }
-    }
-  );
 }
 
 function escapeHtml(text) {
@@ -591,7 +474,7 @@ function findAgentBySpeaker(speaker) {
   if (!raw) return null;
   for (const agent of allAgents) {
     const display = getDisplayName(agent);
-    if (agent.name === raw || display.en === raw || display.zh === raw) {
+    if (agent.agentId === raw || agent.name === raw || display.en === raw || display.zh === raw) {
       return agent;
     }
   }
@@ -618,6 +501,150 @@ function renderMessageLine(speaker, content) {
   liveFeed.scrollTop = liveFeed.scrollHeight;
 }
 
+function sleep(ms) {
+  return new Promise((resolve) => window.setTimeout(resolve, ms));
+}
+
+function calcPlaybackDelay(text, fallback = 760) {
+  const length = String(text || "").trim().length;
+  if (!length) return fallback;
+  return Math.max(
+    DISCUSSION_PLAYBACK_MIN_DELAY_MS,
+    Math.min(DISCUSSION_PLAYBACK_MAX_DELAY_MS, Math.floor(380 + length * 18))
+  );
+}
+
+async function replayDiscussionEvent(turn) {
+  if (!sessionRunning || activeChatChannel !== "live") return;
+  if (turn.event === "turn_chunk" || turn.type === "turn_chunk") {
+    const speaker = String(turn.speaker || "").trim();
+    const chunk = String(turn.content || "");
+    if (!speaker || !chunk) return;
+    const speakerAgent = findAgentBySpeaker(speaker);
+    const merged = `${discussionChunkBySpeaker.get(speaker) || ""}${chunk}`;
+    discussionChunkBySpeaker.set(speaker, merged);
+    ensureDiscussionSection(turn.stage);
+    if (speakerAgent) {
+      updateActiveAgentsFromNames([speakerAgent.name], speakerAgent.name);
+      networkHandle.showAgentSpeech(speakerAgent.agentId, merged, {
+        duration: 30000,
+        force: true,
+        append: false
+      });
+    }
+    return;
+  }
+  if (turn.event === "turn" || turn.type === "turn") {
+    const speakerAgent = findAgentBySpeaker(turn.speaker);
+    const speaker = String(turn.speaker || "").trim();
+    const chunkMerged = speaker ? discussionChunkBySpeaker.get(speaker) || "" : "";
+    const finalContent = chunkMerged || String(turn.content || "");
+    if (speaker) discussionChunkBySpeaker.delete(speaker);
+    ensureDiscussionSection(turn.stage);
+    renderMessageLine(turn.speaker, finalContent);
+    latestDiscussionTranscript.push(`${resolveSpeakerDisplayName(turn.speaker)}：${finalContent}`);
+      if (speakerAgent) {
+        updateActiveAgentsFromNames([speakerAgent.name], speakerAgent.name);
+        networkHandle.showAgentSpeech(speakerAgent.agentId, finalContent, {
+          duration: 30000,
+          force: true,
+          append: false
+        });
+      }
+    await sleep(calcPlaybackDelay(finalContent, 900));
+    return;
+  }
+  if (turn.event === "topic" || turn.type === "topic") {
+    ensureDiscussionSection(turn.stage);
+    renderSystemLine(`${turn.title}｜${turn.goal}`);
+    latestDiscussionTranscript.push(`系统｜${turn.title}：${turn.goal}`);
+    await sleep(calcPlaybackDelay(`${turn.title}${turn.goal}`, 780));
+    return;
+  }
+  if (turn.event === "system" || turn.type === "system") {
+    ensureDiscussionSection(turn.stage);
+    renderSystemLine(turn.content);
+    latestDiscussionTranscript.push(`系统：${turn.content}`);
+    await sleep(calcPlaybackDelay(turn.content, 700));
+    return;
+  }
+  if (turn.event === "summary" || turn.type === "summary") {
+    ensureDiscussionSection(turn.stage);
+    renderSummaryLine(turn.content);
+    latestDiscussionTranscript.push(`总结：${turn.content}`);
+    await sleep(calcPlaybackDelay(turn.content, 820));
+    return;
+  }
+  if (turn.event === "done" || turn.type === "done") {
+    renderSummaryLine("讨论结论已达成，剧组进入制作管线。");
+    latestDiscussionTranscript.push("系统：讨论结论已达成，剧组进入制作管线。");
+    renderSectionLine("pipeline");
+    await sleep(640);
+  }
+}
+
+async function replayDiscussionEvents() {
+  while (!discussionPlaybackDone || discussionPlaybackQueue.length > 0) {
+    if (!sessionRunning || activeChatChannel !== "live") return;
+    if (!discussionPlaybackQueue.length) {
+      await sleep(50);
+      continue;
+    }
+    const turn = discussionPlaybackQueue.shift();
+    if (!turn) continue;
+    await replayDiscussionEvent(turn);
+  }
+}
+
+async function replayDiscussionEvents_DEPRECATED(events) {
+  for (const turn of events) {
+    if (!sessionRunning || activeChatChannel !== "live") return;
+    if (turn.event === "turn" || turn.type === "turn") {
+      const speakerAgent = allAgents.find((agent) => agent.name === turn.speaker);
+      ensureDiscussionSection(turn.stage);
+      renderMessageLine(turn.speaker, turn.content);
+      latestDiscussionTranscript.push(`${resolveSpeakerDisplayName(turn.speaker)}：${turn.content}`);
+      if (speakerAgent) {
+        updateActiveAgentsFromNames([turn.speaker], turn.speaker);
+        networkHandle.showAgentSpeech(speakerAgent.agentId, turn.content, {
+          duration: 30000,
+          force: true,
+          append: true
+        });
+      }
+      await sleep(calcPlaybackDelay(turn.content, 900));
+      continue;
+    }
+    if (turn.event === "topic" || turn.type === "topic") {
+      ensureDiscussionSection(turn.stage);
+      renderSystemLine(`${turn.title}｜${turn.goal}`);
+      latestDiscussionTranscript.push(`系统｜${turn.title}：${turn.goal}`);
+      await sleep(calcPlaybackDelay(`${turn.title}${turn.goal}`, 780));
+      continue;
+    }
+    if (turn.event === "system" || turn.type === "system") {
+      ensureDiscussionSection(turn.stage);
+      renderSystemLine(turn.content);
+      latestDiscussionTranscript.push(`系统：${turn.content}`);
+      await sleep(calcPlaybackDelay(turn.content, 700));
+      continue;
+    }
+    if (turn.event === "summary" || turn.type === "summary") {
+      ensureDiscussionSection(turn.stage);
+      renderSummaryLine(turn.content);
+      latestDiscussionTranscript.push(`总结：${turn.content}`);
+      await sleep(calcPlaybackDelay(turn.content, 820));
+      continue;
+    }
+    if (turn.event === "done" || turn.type === "done") {
+      renderSummaryLine("讨论结论已达成，剧组进入制作管线。");
+      latestDiscussionTranscript.push("系统：讨论结论已达成，剧组进入制作管线。");
+      renderSectionLine("pipeline");
+      await sleep(640);
+    }
+  }
+}
+
 function openLive(question) {
   sessionRunning = true;
   activeChatChannel = "live";
@@ -636,6 +663,7 @@ function openLive(question) {
   networkHandle?.setIdleSpeechEnabled(false);
   queueText.textContent = "LIVE";
   clearStreamRetryAction();
+  discussionChunkBySpeaker.clear();
   lastPhaseSection = "";
   ensureDiscussionSection("briefing");
   renderSystemLine("导演组就位，讨论系统启动。");
@@ -681,6 +709,16 @@ function resetSessionUiToIdle() {
   }
   liveFeed.innerHTML = "";
   startIdleChatter();
+}
+
+function keepErrorState(message) {
+  sessionRunning = false;
+  activeChatChannel = "idle";
+  queueText.textContent = "ERROR";
+  renderSystemLine(`任务失败：${message}`);
+  setStreamRetryAction("重试讨论流（重新开机）", async () => {
+    inputOverlay.requestSubmit();
+  });
 }
 
 function buildCrewNotes() {
@@ -984,22 +1022,14 @@ async function loadIdleDialogueLibrary() {
 }
 
 async function bootstrap() {
-  const [fetchedAgents, idleDialogueResult, gatewayCapabilities, gatewayInvocations] = await Promise.all([
+  const [fetchedAgents, idleDialogueResult] = await Promise.all([
     fetchAgents().catch(async () => {
       const fallback = await fetch("/mock/agents.json").then((res) => res.json());
       return Array.isArray(fallback) ? fallback : [];
     }),
-    loadIdleDialogueLibrary(),
-    fetchGatewayCapabilities().catch(() => []),
-    fetchGatewayInvocations(16).catch(() => [])
+    loadIdleDialogueLibrary()
   ]);
   const agents = await normalizeAgentAvatars(fetchedAgents);
-  gatewayInvocationItems = Array.isArray(gatewayInvocations) ? gatewayInvocations : [];
-  renderGatewayInvocations();
-  networkCallMeta.textContent = `已发现 ${gatewayCapabilities.length} 个可调用能力 · 仅显示最近 2 条关键事件`;
-  networkCallStatus.textContent = "LIVE";
-  networkCallStatus.classList.remove("is-failed");
-  startGatewayTraceStream();
   allAgents = agents;
   if (idleDialogueResult.degraded) {
     idleDialogueWarning?.classList.remove("is-hidden");
@@ -1082,53 +1112,33 @@ inputOverlay.addEventListener("submit", async (event) => {
       });
     }
 
-    const { session } = await createSession({
-      projectId: activeProjectId,
-      prompt: payload.endingDirection,
-      stylePreference: payload.stylePreference
-    });
-    renderSystemLine(`会话已创建：${session.sessionId}`);
+    renderSystemLine(`工程已就绪：${activeProjectId}`);
     renderSystemLine("导演与原著守门人讨论中…");
     networkHandle.pulseZone("mainStage");
     networkHandle.setPhase("discuss");
     markTimelinePhase("discuss");
 
     try {
-      await streamDiscussion(session.sessionId, (turn) => {
-        if (!sessionRunning || activeChatChannel !== "live") return;
-        if (turn.event === "turn" || turn.type === "turn") {
-          const speakerAgent = allAgents.find((agent) => agent.name === turn.speaker);
-          const speakerAgentId = speakerAgent?.agentId || "";
-          const speakerInParticipants = isParticipantAgentId(speakerAgentId);
-          if (!speakerInParticipants) {
-            return;
-          }
-          ensureDiscussionSection(turn.stage);
-          renderMessageLine(turn.speaker, turn.content);
-          latestDiscussionTranscript.push(`${resolveSpeakerDisplayName(turn.speaker)}：${turn.content}`);
-          updateActiveAgentsFromNames([turn.speaker], turn.speaker);
-          if (speakerAgent) networkHandle.showAgentSpeech(speakerAgent.agentId, turn.content, { duration: 3600, force: true });
-        } else if (turn.event === "topic" || turn.type === "topic") {
-          ensureDiscussionSection(turn.stage);
-          renderSystemLine(`${turn.title}｜${turn.goal}`);
-          latestDiscussionTranscript.push(`系统｜${turn.title}：${turn.goal}`);
-        } else if (turn.event === "system" || turn.type === "system") {
-          ensureDiscussionSection(turn.stage);
-          renderSystemLine(turn.content);
-          latestDiscussionTranscript.push(`系统：${turn.content}`);
-        } else if (turn.event === "summary" || turn.type === "summary") {
-          ensureDiscussionSection(turn.stage);
-          renderSummaryLine(turn.content);
-          latestDiscussionTranscript.push(`总结：${turn.content}`);
-        } else if (turn.event === "done" || turn.type === "done") {
-          renderSummaryLine("讨论结论已达成，剧组进入制作管线。");
-          latestDiscussionTranscript.push("系统：讨论结论已达成，剧组进入制作管线。");
-          renderSectionLine("pipeline");
-        } else if (turn.type === "script") {
-          latestGeneratedScript = String(turn.script || "");
+      let playbackError = null;
+      discussionPlaybackQueue = [];
+      discussionPlaybackDone = false;
+      const playbackTask = replayDiscussionEvents();
+      await streamProjectDiscussion(activeProjectId, (turn) => {
+        if (turn.type === "error" || turn.event === "error") {
+          playbackError = new Error(String(turn.message || turn.error || "讨论失败"));
+          return;
         }
+        if (turn.type === "script") {
+          latestGeneratedScript = String(turn.script || "");
+          return;
+        }
+        discussionPlaybackQueue.push(turn);
       });
+      discussionPlaybackDone = true;
+      await playbackTask;
+      if (playbackError) throw playbackError;
     } catch (discussionError) {
+      discussionPlaybackDone = true;
       setStreamRetryAction("重试讨论流（重新开机）", async () => {
         inputOverlay.requestSubmit();
       });
@@ -1138,19 +1148,20 @@ inputOverlay.addEventListener("submit", async (event) => {
     if (!latestGeneratedScript && latestDiscussionTranscript.length) {
       latestGeneratedScript = latestDiscussionTranscript.join("\n");
     }
+    if (!latestGeneratedScript.trim()) {
+      throw new Error("讨论未产出可用剧本，请检查 OPENAI 配置或模型响应。");
+    }
     openScriptReview(latestGeneratedScript);
     await waitForGenerateConfirm();
     scriptReviewGenerateBtn.disabled = true;
     scriptReviewProgress.textContent = "视频任务创建中…";
 
-    let sourceVideoRef = [];
     if (sourceVideoFile) {
       renderSystemLine(`素材上传中：${sourceVideoFile.name}`);
       const { upload } = await uploadVideoSource(activeProjectId, sourceVideoFile);
       renderSystemLine(`素材上传完成：${upload.originalName}`);
-      sourceVideoRef = [upload.uploadId];
     }
-    const { job } = await createVideoJob(session.sessionId, sourceVideoRef);
+    const { job } = await createProjectVideoJob(activeProjectId);
     renderSystemLine(`视频任务已创建：${job.jobId}`);
     networkHandle.setPhase("collect");
     markTimelinePhase("collect");
@@ -1219,12 +1230,16 @@ inputOverlay.addEventListener("submit", async (event) => {
     };
     attachVideoStream();
   } catch (error) {
-    renderSystemLine(`任务失败：${error.message}`);
-    scriptReviewProgress.textContent = `失败：${error.message}`;
+    if (String(error?.message || "") === "已取消生成") {
+      renderSystemLine("已取消本次生成。");
+      resetSessionUiToIdle();
+      return;
+    }
+    const errMsg = String(error?.message || "未知错误");
+    scriptReviewProgress.textContent = `失败：${errMsg}`;
     scriptReviewGenerateBtn.disabled = false;
     networkHandle.release();
-    resetSessionUiToIdle();
-    queueText.textContent = "ERROR";
+    keepErrorState(errMsg);
   }
 });
 
@@ -1269,11 +1284,16 @@ resultOverlay.addEventListener("click", (event) => {
   if (event.target === resultOverlay) hideResultOverlay();
 });
 scriptReviewOverlay.addEventListener("click", (event) => {
+  if (Date.now() - scriptReviewOpenedAtMs < 300) return;
   if (event.target === scriptReviewOverlay) closeScriptReview();
 });
 
 window.addEventListener("keydown", (event) => {
   if (event.key !== "Escape") return;
+  if (!scriptReviewOverlay.classList.contains("is-hidden")) {
+    closeScriptReview();
+    return;
+  }
   if (resultOverlay.classList.contains("is-hidden")) return;
   hideResultOverlay();
 });
@@ -1282,10 +1302,6 @@ detailClose.addEventListener("click", hideAgentDetail);
 overlayToggleBtn.addEventListener("click", () => toggleOverlayCollapsed());
 zoomDirectorsBtn.addEventListener("click", () => networkHandle?.zoomToZone("directors"));
 zoomResetBtn.addEventListener("click", () => networkHandle?.resetCamera());
-networkCallToggle?.addEventListener("click", () => {
-  const collapsed = networkCallPanel?.classList.contains("is-collapsed");
-  setNetworkCallPanelCollapsed(!collapsed);
-});
 loadDemoBtn.addEventListener("click", () => {
   const workTitleInput = document.querySelector("#work-title");
   const endingDirectionInput = document.querySelector("#ending-direction");

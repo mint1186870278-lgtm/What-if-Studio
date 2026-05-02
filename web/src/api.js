@@ -48,24 +48,8 @@ async function parseApiError(res, fallbackMessage) {
   return fallbackMessage;
 }
 
-export async function createSession(payload) {
-  const body = {
-    project_id: payload.projectId,
-    prompt: payload.prompt,
-    style_preference: payload.stylePreference || "auto"
-  };
-  const res = await fetch(joinApiUrl("/api/sessions"), {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body)
-  });
-  if (!res.ok) throw new Error(await parseApiError(res, "创建会话失败"));
-  const session = await res.json();
-  return { session: { ...session, sessionId: session.id } };
-}
-
-export async function streamDiscussion(sessionId, onTurn) {
-  const res = await fetch(joinApiUrl(`/api/sessions/${sessionId}/discuss/stream`), {
+export async function streamProjectDiscussion(projectId, onTurn) {
+  const res = await fetch(joinApiUrl(`/api/projects/${projectId}/script/stream`), {
     method: "POST",
     headers: { "Content-Type": "application/json" }
   });
@@ -91,16 +75,14 @@ export async function streamDiscussion(sessionId, onTurn) {
   }
 }
 
-export async function createVideoJob(sessionId, sourceVideoPath) {
-  const assetIds = Array.isArray(sourceVideoPath) ? sourceVideoPath : [];
-  const res = await fetch(joinApiUrl("/api/video-jobs"), {
+export async function createProjectVideoJob(projectId) {
+  const res = await fetch(joinApiUrl(`/api/projects/${projectId}/video-jobs`), {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ session_id: sessionId, asset_ids: assetIds })
+    headers: { "Content-Type": "application/json" }
   });
   if (!res.ok) throw new Error(await parseApiError(res, "视频任务创建失败"));
-  const job = await res.json();
-  return { job: { ...job, jobId: job.id } };
+  const data = await res.json();
+  return data?.job ? data : { job: { ...data, jobId: data.id } };
 }
 
 export async function uploadVideoSource(projectId, file) {
@@ -145,34 +127,6 @@ export function watchVideoJob(jobId, onEvent, options = {}) {
     if (typeof options.onDisconnect === "function") options.onDisconnect();
     onEvent({ event: "error", message: "任务事件流中断，请稍后重试。" });
     source.close();
-  };
-  return () => source.close();
-}
-
-export async function fetchGatewayCapabilities() {
-  const res = await fetch(joinApiUrl("/api/gateway/services"));
-  if (!res.ok) throw new Error(await parseApiError(res, "能力列表加载失败"));
-  const data = await res.json();
-  return Array.isArray(data?.services) ? data.services : [];
-}
-
-export async function fetchGatewayInvocations(limit = 24) {
-  const res = await fetch(joinApiUrl(`/api/gateway/invocations?limit=${limit}`));
-  if (!res.ok) throw new Error(await parseApiError(res, "调用日志加载失败"));
-  const data = await res.json();
-  return Array.isArray(data?.invocations) ? data.invocations : [];
-}
-
-export function watchGatewayInvocations(onEvent, options = {}) {
-  const source = new EventSource(joinApiUrl("/api/gateway/invocations/events"));
-  source.onmessage = (event) => {
-    const payload = safeParseJson(event.data);
-    if (!payload) return;
-    onEvent(payload);
-  };
-  source.onerror = () => {
-    if (typeof options.onDisconnect === "function") options.onDisconnect();
-    onEvent({ event: "error", message: "网关调用流中断，正在等待重连。" });
   };
   return () => source.close();
 }
