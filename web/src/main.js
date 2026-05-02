@@ -151,7 +151,7 @@ app.innerHTML = `
           </header>
           <div class="result-notes">
             <div class="result-notes-head">SCRIPT</div>
-            <pre id="script-review-content" class="result-note-text" style="white-space: pre-wrap; max-height: 44vh; overflow:auto;"></pre>
+            <pre id="script-review-content" class="result-note-text" style="white-space: pre-wrap; max-height: 65vh; overflow:auto;"></pre>
           </div>
           <div class="result-notes">
             <div class="result-notes-head">PROGRESS</div>
