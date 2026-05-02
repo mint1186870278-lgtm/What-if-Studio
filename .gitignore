@@ -33,6 +33,7 @@ logs/
 build/
 dist/
 *.egg-info/
+.pdm-build/
 
 # Node
 node_modules/
@@ -51,3 +52,7 @@ node_modules
 dist
 tmp-artifacts
 .DS_Store
+
+# Web build outputs
+web/node_modules/
+web/dist/

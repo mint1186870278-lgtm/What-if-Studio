@@ -2,10 +2,13 @@
 
 import logging
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
 from fastapi.responses import JSONResponse
+from fastapi.staticfiles import StaticFiles
 
 from src.config import settings
 from src.db import init_db
@@ -80,6 +83,49 @@ app.include_router(assets.router, prefix="/api", tags=["assets"])
 app.include_router(sessions.router, prefix="/api", tags=["sessions"])
 app.include_router(jobs.router, prefix="/api", tags=["jobs"])
 app.include_router(gateway.router, prefix="/api", tags=["gateway"])  # Gateway routes
+
+
+def resolve_frontend_dist_dir() -> Path:
+    return settings.frontend_dist_dir.resolve()
+
+
+def mount_frontend_assets(application: FastAPI) -> None:
+    dist_dir = resolve_frontend_dist_dir()
+    if not dist_dir.exists():
+        logger.warning("Frontend dist directory not found: %s", dist_dir)
+        return
+    for folder in ("assets", "mock", "background"):
+        target = dist_dir / folder
+        if target.exists():
+            application.mount(f"/{folder}", StaticFiles(directory=target), name=f"frontend-{folder}")
+
+
+mount_frontend_assets(app)
+
+
+@app.get("/", include_in_schema=False)
+async def serve_frontend_index():
+    dist_dir = resolve_frontend_dist_dir()
+    index_file = dist_dir / "index.html"
+    if not index_file.exists():
+        raise RuntimeError(f"Frontend index not found: {index_file}")
+    return FileResponse(index_file)
+
+
+@app.get("/{full_path:path}", include_in_schema=False)
+async def spa_fallback(full_path: str):
+    if full_path.startswith("api/") or full_path == "health" or full_path == "api/health":
+        return JSONResponse(status_code=404, content={"detail": "Not Found"})
+
+    dist_dir = resolve_frontend_dist_dir()
+    file_candidate = (dist_dir / full_path).resolve()
+    if dist_dir in file_candidate.parents and file_candidate.exists() and file_candidate.is_file():
+        return FileResponse(file_candidate)
+
+    index_file = dist_dir / "index.html"
+    if index_file.exists():
+        return FileResponse(index_file)
+    return JSONResponse(status_code=404, content={"detail": "Frontend not built"})
 
 
 if __name__ == "__main__":

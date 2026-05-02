@@ -9,7 +9,7 @@ class Settings(BaseSettings):
     """Application settings"""
 
     # Database
-    database_url: str = "sqlite:///./projects.db"
+    database_url: str = os.getenv("DATABASE_URL", "sqlite:///./whatif.db")
 
     # API Configuration
     debug: bool = os.getenv("DEBUG", "true").lower() == "true"
@@ -35,6 +35,7 @@ class Settings(BaseSettings):
     # Server
     host: str = os.getenv("HOST", "0.0.0.0")
     port: int = int(os.getenv("PORT", "8000"))
+    frontend_dist_dir: Path = Path(os.getenv("FRONTEND_DIST_DIR", "./web/dist"))
 
     class Config:
         env_file = ".env"

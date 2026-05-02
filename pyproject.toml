@@ -1,5 +1,5 @@
 [project]
-name = "video-editing-api"
+name = "whatif-studio"
 version = "0.1.0"
 description = "FastAPI backend for creative video editing with multi-agent collaboration"
 readme = "README.md"

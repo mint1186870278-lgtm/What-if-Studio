@@ -1,5 +1,5 @@
 import "./style.css";
-import { parseCreativeSession } from "@yinanping/contracts";
+import { parseCreativeSession } from "./sessionSchema";
 import { createNetwork } from "./network";
 import {
   createSession,

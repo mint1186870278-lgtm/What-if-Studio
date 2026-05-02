@@ -7,7 +7,7 @@ function getViteEnvValue(key) {
 export function resolveApiBase() {
   const envBase = getViteEnvValue("VITE_API_BASE");
   if (envBase) return envBase.replace(/\/+$/, "");
-  if (typeof window === "undefined") return "http://localhost:3567";
+  if (typeof window === "undefined") return "http://localhost:8000";
   // Prefer same-origin /api in browser so dev proxy and production reverse-proxy both work.
   return "";
 }

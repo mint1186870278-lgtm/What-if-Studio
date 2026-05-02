@@ -8,9 +8,9 @@ The active backend lives in `src/` and is run with `uv`.
 
 Current flow:
 
-- Session discussion uses AutoGen multi-director streaming in `src/agents`.
-- Video jobs read project/session/asset data from the database and call Seedance directly.
-- The public ANet-facing gateway is exposed from `/api/gateway/*`.
+- AutoGen in `src/agents` handles multi-director discussion and script generation.
+- Core video-editing business APIs (projects/assets/sessions/jobs) are served by FastAPI.
+- ANet gateway exposes backend capabilities to Agent Network callers; it does not replace AutoGen discussion.
 
 1. Sync dependencies:
   - `uv sync`
@@ -29,47 +29,35 @@ Node backend and can be ignored for the current Python backend.
 
 ## Structure
 
-- `apps/web`: Vite + D3 front-end demo.
-- `apps/api`: Node API for session, discussion, and video jobs.
-- `packages/contracts`: shared runtime contracts.
-- `packages/agent-profiles`: shared agent definitions.
+- `src`: FastAPI backend.
+- `web`: Vite + D3 frontend source.
+- `web/dist`: frontend production build artifacts served by FastAPI.
+- `storage`: runtime file storage.
 
-## Run
+## Frontend + FastAPI Integration
 
-1. Install dependencies:
+1. Install frontend dependencies:
+   - `cd web`
    - `npm install`
-2. Start API:
-   - `npm run dev:api`
-3. Start web:
-   - `npm run dev:web`
+2. Build frontend:
+   - `npm run build`
+3. Start backend from repo root:
+   - `uv run uvicorn src.main:app --reload`
+4. Open:
+   - `http://127.0.0.1:8000`
 
-Defaults:
-
-- API: `http://localhost:3567`
-- Web: `http://localhost:5173`
-- Sessions: persisted to `tmp-data/sessions.json` by default
+The backend serves `web/dist` directly.  
+If needed, override dist path with `FRONTEND_DIST_DIR` in `.env`.
 
 ## Environment variables
 
-Copy `.env.example` at repo root and `apps/web/.env.example` as needed.
+Copy `.env.example` at repo root and `web/.env.example` as needed.
 
-- `PORT`: API port (default `3567`)
-- `CORS_ORIGIN`: allowed web origin (default `*` when empty)
-- `SESSION_STORE_PATH`: persisted session store path
-- `IOPHO_SCRIPT_PATH`: optional storyboard script path
-- `DISCUSSION_ENGINE_MODE`: `template` (default) or `distilled`
-- `DEMO_CLIP_SECONDS`: output mp4 clip length for demo render
-- `VITE_API_BASE`: web-side API base URL (optional, defaults to current host + `:3567`)
-
-## Optional iopho integration
-
-Set `IOPHO_SCRIPT_PATH` to the absolute path of:
-
-- `skills/iopho-analyzing-videos/scripts/video_to_storyboard.py`
-
-If the script is unavailable or fails, API falls back to a placeholder artifact for demo continuity.
-
-If `sourceVideoPath` is provided and valid, API now creates a real source-preview artifact before optional storyboard analysis.
+- `OPENAI_API_KEY`: model provider API key required by AutoGen discussion
+- `OPENAI_BASE_URL`: OpenAI-compatible endpoint base URL (default `https://api.openai.com/v1`)
+- `AUTOGEN_MODEL`: model name used by AutoGen discussion (default `gpt-4o-mini`)
+- `DATABASE_URL`: backend database URL (default `sqlite:///./whatif.db`)
+- `FRONTEND_DIST_DIR`: frontend static dist directory (default `./web/dist`)
 
 ## Demo mp4 pipeline
 
@@ -83,20 +71,17 @@ If `sourceVideoPath` is provided and valid, API now creates a real source-previe
 - `POST /api/gateway/invoke`
 - `GET /api/gateway/invocations`
 - `GET /api/gateway/invocations/events`
-- The gateway exposes the video-editing service externally while keeping discussion planning inside AutoGen.
-
-- API now includes a P2P-style service gateway:
-  - `GET /api/gateway/services`
-  - `GET /api/gateway/capabilities`
-  - `POST /api/gateway/invoke`
-  - `GET /api/gateway/invocations` and `/api/gateway/invocations/events`
-- Default gateway token is `agent-network-demo-token` (override with `GATEWAY_TOKEN`).
-- Built-in capability services:
-  - `director-brain`: `discussion.generateTimeline`
-  - `video-lab`: `video.createJob`, `video.getJob`
-  - `audio-lab`: `soundtrack.suggest`
-  - `orchestrator-hub`: `production.plan` (cross-agent invoke demo)
-  - `video-editing-api`: read project/session/assets from DB and call Seedance
+- Role split:
+  - AutoGen: multi-director discussion (`/api/sessions/.../stream`) and script synthesis.
+  - ANet gateway: external service access layer for backend capabilities.
+- ANet-facing services currently include:
+  - `autogen.discussion` (discussion generation)
+  - `autogen.edit` (editing-plan proposal)
+  - `autogen.sound` (sound design proposal)
+  - `anet.video_editing` and `video-editing-api` (session/script/assets driven render workflow)
+- Integration intent:
+  - Keep frontend APIs as the primary product surface (create project, upload assets, start session/job, query progress).
+  - Mirror equivalent capabilities through ANet for network-based invocation.
 
 ## ANet full integration runbook
 
@@ -110,7 +95,8 @@ If `sourceVideoPath` is provided and valid, API now creates a real source-previe
 
 - The backend uses AutoGen in `src/agents` for multi-director discussion.
 - `/api/sessions/:id/stream` streams every AutoGen message and the final synthesized markdown.
-- `src/agents` does not handle video generation; video jobs remain in the API layer and call Seedance using the project database contents.
+- AutoGen discussion is a domain module, not an ANet fallback path.
+- Video generation stays in API/render services and uses database-backed project/session/asset context.
 
 ### 3) Troubleshooting
 
@@ -125,5 +111,5 @@ If `sourceVideoPath` is provided and valid, API now creates a real source-previe
 - Run pipeline smoke scenarios:
   - `npm run smoke:video`
   - Optional: set `SMOKE_VIDEO_PATH` to enable real-path scenarios.
-- Run gateway chaos/fallback scenarios:
+- Run gateway scenarios:
   - `npm run smoke:gateway`
