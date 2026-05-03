@@ -49,8 +49,9 @@ app.innerHTML = `
           <option value="fantasyGrand">偏奇幻宏大</option>
         </select>
 
-        <label class="field-label" for="source-video-file">上传素材视频（可选）</label>
-        <input id="source-video-file" name="sourceVideoFile" type="file" accept="video/*" />
+        <label class="field-label" for="reference-images">参考图片（可选，用于 I2V 图生视频）</label>
+        <input id="reference-images" name="referenceImages" type="file" accept="image/*" multiple />
+        <p class="card-summary card-summary-soft" style="margin-top:-4px;margin-bottom:12px;">不传则纯文本生成视频</p>
         <p id="idle-dialogue-warning" class="card-summary card-summary-soft form-warning is-hidden">
           闲聊语料加载失败，已降级为基础闲聊模式。
         </p>
@@ -1090,9 +1091,10 @@ inputOverlay.addEventListener("submit", async (event) => {
     endingDirection: String(formData.get("endingDirection") || "").trim(),
     stylePreference: String(formData.get("stylePreference") || "auto")
   };
-  const rawSourceVideoFile = formData.get("sourceVideoFile");
-  const sourceVideoFile =
-    rawSourceVideoFile instanceof File && rawSourceVideoFile.size > 0 ? rawSourceVideoFile : null;
+  const rawRefImages = formData.getAll("referenceImages");
+  const refImageFiles = rawRefImages
+    .filter((f) => f instanceof File && f.size > 0)
+    .slice(0, 5);
 
   let payload;
   try {
@@ -1177,13 +1179,19 @@ inputOverlay.addEventListener("submit", async (event) => {
     scriptReviewGenerateBtn.disabled = true;
     scriptReviewProgress.textContent = "视频任务创建中…";
 
-    if (sourceVideoFile) {
-      renderSystemLine(`素材上传中：${sourceVideoFile.name}`);
-      const { upload } = await uploadVideoSource(activeProjectId, sourceVideoFile);
-      renderSystemLine(`素材上传完成：${upload.originalName}`);
+    // Upload reference images (optional, for I2V)
+    let uploadedImageId = null;
+    for (const imgFile of refImageFiles) {
+      renderSystemLine(`上传参考图片：${imgFile.name}`);
+      const { upload } = await uploadVideoSource(activeProjectId, imgFile, "image");
+      renderSystemLine(`图片上传完成：${upload.originalName}`);
+      if (upload.uploadId && !uploadedImageId) uploadedImageId = upload.uploadId;
     }
     const { job } = await createProjectVideoJob(activeProjectId);
     renderSystemLine(`视频任务已创建：${job.jobId}`);
+    const origin = window.location.origin;
+    const sourceImageUrl = uploadedImageId ? `${origin}/api/assets/${uploadedImageId}/download` : "";
+    if (sourceImageUrl) renderSystemLine(`参考图片已就绪，即将进行 I2V 生成`);
     networkHandle.setPhase("collect");
     markTimelinePhase("collect");
 
@@ -1240,6 +1248,7 @@ inputOverlay.addEventListener("submit", async (event) => {
           }
         },
         {
+          imageUrl: sourceImageUrl,
           onDisconnect: () => {
             setStreamRetryAction("重连任务流", async () => {
               renderSystemLine("正在重连任务流…");

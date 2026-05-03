@@ -24,6 +24,7 @@ async def process_video_job_background(
     job_id: str,
     session_id: str,
     asset_ids: list[str],
+    image_url: str | None = None,
 ):
     """Background task to process video job through pipeline stages.
 
@@ -74,7 +75,22 @@ async def process_video_job_background(
 
         try:
             from src.core.video_pipeline import generate_video_from_script
-            actual_path = await generate_video_from_script(session.script or "", output_path)
+            # The prompt is the full director discussion script (what directors produced),
+            # combined with any uploaded image for I2V reference.
+            import re
+            full_script = (session.script or "").strip()
+            # Clean up: remove markdown headers and FINAL_JSON data
+            script_clean = re.sub(r"^#+\s*", "", full_script, flags=re.MULTILINE)
+            script_clean = re.sub(r"\s*FINAL_JSON\s*[\s\S]*", "", script_clean, flags=re.DOTALL)
+            script_clean = script_clean.strip()
+            # Use the full cleaned script as the prompt (truncated to a reasonable length)
+            video_prompt = script_clean[:800] if script_clean else "生成一段视频"
+
+            actual_path = await generate_video_from_script(
+                session.script or "", output_path,
+                prompt_override=video_prompt,
+                image_url=image_url,
+            )
             job.output_path = actual_path
             logger.info("✅ Video generated: %s", actual_path)
         except Exception as render_err:
@@ -110,6 +126,7 @@ async def generate_video_progress_stream(
     session_id: str,
     asset_ids: list[str],
     db: DBSession,
+    image_url: str | None = None,
 ) -> AsyncGenerator[str, None]:
     """Generate SSE stream for video job progress"""
     try:
@@ -121,7 +138,7 @@ async def generate_video_progress_stream(
 
         # Start background processing task with its own DB session
         task = asyncio.create_task(
-            process_video_job_background(job_id, session_id, asset_ids)
+            process_video_job_background(job_id, session_id, asset_ids, image_url)
         )
 
         # Stream progress events
@@ -258,8 +275,12 @@ async def get_video_job(
 async def stream_video_progress(
     job_id: str,
     db: DBSession = Depends(get_db),
+    image_url: str | None = None,
 ):
-    """Stream video job progress as Server-Sent Events"""
+    """Stream video job progress as Server-Sent Events
+
+    Query param ``image_url`` — optional reference image for I2V generation.
+    """
     job = db.query(VideoJob).filter(VideoJob.id == job_id).first()
     if not job:
         raise HTTPException(
@@ -268,7 +289,7 @@ async def stream_video_progress(
         )
 
     return StreamingResponse(
-        generate_video_progress_stream(job_id, job.session_id, [], db),
+        generate_video_progress_stream(job_id, job.session_id, [], db, image_url=image_url),
         media_type="text/event-stream",
         headers={
             "Cache-Control": "no-cache",

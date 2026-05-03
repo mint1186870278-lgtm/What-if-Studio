@@ -20,7 +20,7 @@ logger = logging.getLogger(__name__)
 # SiliconFlow Wan T2V client
 # ---------------------------------------------------------------------------
 
-_T2V_MODEL = "Wan-AI/Wan2.2-T2V-A14B"
+_T2V_MODEL = "Wan-AI/Wan2.2-T2V-A14B"  # Supports both T2V and I2V via optional image_url
 _DEFAULT_POLL_INTERVAL = 3.0
 _MAX_POLL_ATTEMPTS = 120
 
@@ -34,17 +34,19 @@ def _siliconflow_base() -> str:
     return os.environ.get("SILICONFLOW_BASE_URL", "https://api.siliconflow.cn/v1").rstrip("/")
 
 
-async def _submit_wan_task(prompt: str, **extra: dict) -> str:
-    """Submit an async T2V task to SiliconFlow and return the request_id."""
+async def _submit_wan_task(prompt: str, image_url: str | None = None, **extra: dict) -> str:
+    """Submit an async I2V task to SiliconFlow and return the request_id."""
     headers = {
         "Authorization": f"Bearer {_siliconflow_key()}",
         "Content-Type": "application/json",
     }
-    payload = {
+    payload: dict[str, object] = {
         "model": _T2V_MODEL,
         "prompt": prompt,
-        **extra,
     }
+    if image_url:
+        payload["image_url"] = image_url
+    payload.update(**extra)
     async with httpx.AsyncClient() as client:
         resp = await client.post(
             f"{_siliconflow_base()}/video/submit",
@@ -208,12 +210,14 @@ async def generate_video_from_script(
     script: str,
     output_path: str,
     prompt_override: str | None = None,
+    image_url: str | None = None,
 ) -> str:
     """Generate a video clip from a Markdown script.
 
-    1. If ``SILICONFLOW_API_KEY`` is set → call Wan T2V on SiliconFlow.
-    2. Otherwise → write a placeholder file.
+    1. If ``SILICONFLOW_API_KEY`` is set → call Wan I2V on SiliconFlow.
+    2. Otherwise → fall back to ffmpeg text-overlay video.
 
+    When ``image_url`` is provided, it's passed as a reference image (I2V mode).
     Returns the *output_path* on success.
     """
     output = Path(output_path)
@@ -232,12 +236,12 @@ async def generate_video_from_script(
 
     api_key = _siliconflow_key()
     if api_key:
-        logger.info("📹 Submitting Wan T2V job via SiliconFlow...")
+        logger.info("📹 Submitting Wan I2V job via SiliconFlow...")
         try:
-            request_id = await _submit_wan_task(prompt, size="1280x720", duration=5)
-            logger.info("Wan T2V task submitted, id=%s", request_id)
+            request_id = await _submit_wan_task(prompt, image_url=image_url, size="1280x720", duration=5)
+            logger.info("Wan I2V task submitted, id=%s", request_id)
             video_url = await _poll_wan_task(request_id)
-            logger.info("Wan T2V completed, URL: %s", video_url[:60])
+            logger.info("Wan I2V completed, URL: %s", video_url[:60])
             # Download the result to the local output path
             async with httpx.AsyncClient() as client:
                 resp = await client.get(video_url, timeout=120)
@@ -246,11 +250,11 @@ async def generate_video_from_script(
             logger.info("✅ Video saved to %s (%d bytes)", output_path, output.stat().st_size)
             return str(output_path)
         except Exception as exc:
-            logger.warning("Wan T2V failed (%s); falling back to placeholder", exc)
+            logger.warning("Wan I2V failed (%s); falling back to ffmpeg", exc)
     else:
         logger.info(
-            "SILICONFLOW_API_KEY not set — writing placeholder video. "
-            "Set SILICONFLOW_API_KEY in .env to enable Wan T2V generation."
+            "SILICONFLOW_API_KEY not set — using ffmpeg fallback. "
+            "Set SILICONFLOW_API_KEY in .env to enable Wan I2V generation."
         )
 
     # Fallback: use ffmpeg to create a real playable MP4 from the script text
@@ -288,7 +292,7 @@ class VideoPipelineManager:
     """Manager for video processing pipeline."""
 
     def __init__(self, seedance_api_url: str = ""):
-        logger.info("📋 VideoPipelineManager initialized (Wan T2V ready)")
+        logger.info("📋 VideoPipelineManager initialized (Wan I2V ready)")
 
     async def process_job(self, job_id: str, script: str, assets: list[str]) -> str:
         logger.info("🎞️  Processing job: %s", job_id)
