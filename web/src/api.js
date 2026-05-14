@@ -109,7 +109,10 @@ export async function fetchAgents() {
 
 export function watchVideoJob(jobId, onEvent, options = {}) {
   const params = new URLSearchParams();
-  if (options.imageUrl) params.set("image_url", options.imageUrl);
+  if (options.videoUrl) params.set("video_url", options.videoUrl);
+  if (options.refImageUrls?.length) {
+    options.refImageUrls.forEach((url) => params.append("ref_image_url", url));
+  }
   const query = params.toString() ? `?${params.toString()}` : "";
   const source = new EventSource(joinApiUrl(`/api/video-jobs/${jobId}/events${query}`));
   source.onmessage = (event) => {

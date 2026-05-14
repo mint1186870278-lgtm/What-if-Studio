@@ -103,3 +103,50 @@ class ANetInvocation(Base):
     response = Column(JSON, nullable=True)
     error = Column(Text, nullable=True)
     timestamp = Column(DateTime, default=datetime.utcnow, nullable=False, index=True)
+
+
+# ---------------------------------------------------------------------------
+# New models for refactored system (LangGraph + Memory)
+# ---------------------------------------------------------------------------
+
+
+class UserPreference(Base):
+    """Cross-session user preference (Mem0-backed with local cache)."""
+
+    __tablename__ = "user_preferences"
+
+    id = Column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    user_id = Column(String(255), nullable=False, index=True)
+    preference_key = Column(String(255), nullable=False)
+    preference_value = Column(Text, nullable=True)
+    confidence = Column(Integer, default=50)
+    source = Column(String(50), default="inferred")  # 'explicit', 'inferred', 'feedback'
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+
+class ScriptVector(Base):
+    """Metadata for scripts stored in Chroma vector DB."""
+
+    __tablename__ = "script_vectors"
+
+    id = Column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    chroma_doc_id = Column(String(255), nullable=False, unique=True, index=True)
+    project_id = Column(String(36), nullable=True, index=True)
+    user_id = Column(String(255), nullable=True, index=True)
+    style = Column(String(50), nullable=True)
+    prompt_hash = Column(String(64), nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+
+class DiscussionCheckpoint(Base):
+    """LangGraph discussion checkpoint metadata."""
+
+    __tablename__ = "discussion_checkpoints"
+
+    id = Column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    session_id = Column(String(36), nullable=False, index=True)
+    thread_id = Column(String(255), nullable=False, unique=True, index=True)
+    checkpoint_data = Column(JSON, nullable=False)  # Serialized LangGraph checkpoint
+    status = Column(String(50), default="active")  # 'active', 'completed', 'interrupted'
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)

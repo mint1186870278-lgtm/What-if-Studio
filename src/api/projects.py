@@ -166,8 +166,9 @@ async def _generate_project_discussion_stream(project: Project, db: Session):
     db.commit()
     yield f"data: {json.dumps({'type': 'system', 'content': 'discussion_started'}, ensure_ascii=False)}\n\n"
     try:
+        user_request = f"{project.name}：{project.prompt or ''}" if project.name else (project.prompt or "")
         async for event in run_autogen_discussion_stream(
-            user_request=project.prompt or "",
+            user_request=user_request,
             style=project.style_preference or "auto",
         ):
             # Map type → event for frontend compatibility

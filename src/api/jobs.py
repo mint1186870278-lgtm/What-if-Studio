@@ -24,7 +24,8 @@ async def process_video_job_background(
     job_id: str,
     session_id: str,
     asset_ids: list[str],
-    image_url: str | None = None,
+    video_url: str | None = None,
+    reference_image_urls: list[str] | None = None,
 ):
     """Background task to process video job through pipeline stages.
 
@@ -75,21 +76,23 @@ async def process_video_job_background(
 
         try:
             from src.core.video_pipeline import generate_video_from_script
-            # The prompt is the full director discussion script (what directors produced),
-            # combined with any uploaded image for I2V reference.
-            import re
-            full_script = (session.script or "").strip()
-            # Clean up: remove markdown headers and FINAL_JSON data
-            script_clean = re.sub(r"^#+\s*", "", full_script, flags=re.MULTILINE)
-            script_clean = re.sub(r"\s*FINAL_JSON\s*[\s\S]*", "", script_clean, flags=re.DOTALL)
-            script_clean = script_clean.strip()
-            # Use the full cleaned script as the prompt (truncated to a reasonable length)
-            video_prompt = script_clean[:800] if script_clean else "生成一段视频"
+            work_title = (session.project.name or "") if session.project else ""
+            ending = (session.prompt or "").strip()
+            if work_title and ending:
+                video_prompt = f"电影：《{work_title}》结局改写，剧情：{ending}"
+            elif work_title:
+                video_prompt = f"电影：《{work_title}》结局改写"
+            elif ending:
+                video_prompt = f"场景：{ending}"
+            else:
+                video_prompt = "生成一段视频"
 
+            logger.info("📤 HappyHorse prompt: %s", video_prompt[:150])
             actual_path = await generate_video_from_script(
                 session.script or "", output_path,
                 prompt_override=video_prompt,
-                image_url=image_url,
+                video_url=video_url,
+                reference_image_urls=reference_image_urls,
             )
             job.output_path = actual_path
             logger.info("✅ Video generated: %s", actual_path)
@@ -126,7 +129,8 @@ async def generate_video_progress_stream(
     session_id: str,
     asset_ids: list[str],
     db: DBSession,
-    image_url: str | None = None,
+    video_url: str | None = None,
+    reference_image_urls: list[str] | None = None,
 ) -> AsyncGenerator[str, None]:
     """Generate SSE stream for video job progress"""
     try:
@@ -138,7 +142,11 @@ async def generate_video_progress_stream(
 
         # Start background processing task with its own DB session
         task = asyncio.create_task(
-            process_video_job_background(job_id, session_id, asset_ids, image_url)
+            process_video_job_background(
+                job_id, session_id, asset_ids,
+                video_url=video_url,
+                reference_image_urls=reference_image_urls,
+            )
         )
 
         # Stream progress events
@@ -275,11 +283,14 @@ async def get_video_job(
 async def stream_video_progress(
     job_id: str,
     db: DBSession = Depends(get_db),
-    image_url: str | None = None,
+    video_url: str | None = None,
+    ref_image_url: list[str] | None = None,
 ):
     """Stream video job progress as Server-Sent Events
 
-    Query param ``image_url`` — optional reference image for I2V generation.
+    Query params:
+      ``video_url`` — source video URL for HappyHorse editing (required).
+      ``ref_image_url`` — optional reference image URLs (repeatable, max 5).
     """
     job = db.query(VideoJob).filter(VideoJob.id == job_id).first()
     if not job:
@@ -289,7 +300,10 @@ async def stream_video_progress(
         )
 
     return StreamingResponse(
-        generate_video_progress_stream(job_id, job.session_id, [], db, image_url=image_url),
+        generate_video_progress_stream(
+            job_id, job.session_id, [], db,
+            video_url=video_url, reference_image_urls=ref_image_url,
+        ),
         media_type="text/event-stream",
         headers={
             "Cache-Control": "no-cache",

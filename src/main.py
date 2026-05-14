@@ -26,6 +26,9 @@ async def lifespan(app: FastAPI):
     logger.info("🚀 Starting whatif-studio API")
     settings.validate_openai_env()
     settings.ensure_storage_paths()
+    # Ensure Chroma persistence directory
+    from pathlib import Path as _Path
+    _Path(settings.chroma_persist_path).mkdir(parents=True, exist_ok=True)
     init_db()
     logger.info("✅ Database initialized")
 
@@ -90,7 +93,7 @@ async def general_exception_handler(request, exc):
 
 
 # Include API routes
-from src.api import projects, assets, sessions, jobs, gateway, agents
+from src.api import projects, assets, sessions, jobs, gateway, agents, ws
 
 app.include_router(projects.router, prefix="/api", tags=["projects"])
 app.include_router(assets.router, prefix="/api", tags=["assets"])
@@ -98,6 +101,7 @@ app.include_router(sessions.router, prefix="/api", tags=["sessions"])
 app.include_router(jobs.router, prefix="/api", tags=["jobs"])
 app.include_router(gateway.router, prefix="/api", tags=["gateway"])  # Gateway routes
 app.include_router(agents.router, prefix="/api", tags=["agents"])
+app.include_router(ws.router, tags=["websocket"])  # WebSocket for human-in-the-loop
 
 
 def resolve_frontend_dist_dir() -> Path:

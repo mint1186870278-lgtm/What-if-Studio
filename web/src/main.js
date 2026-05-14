@@ -49,9 +49,10 @@ app.innerHTML = `
           <option value="fantasyGrand">偏奇幻宏大</option>
         </select>
 
-        <label class="field-label" for="reference-images">参考图片（可选，用于 I2V 图生视频）</label>
+        <label class="field-label" for="source-video-file">上传素材视频 <strong style="color:#c9a84c">*</strong></label>
+        <input id="source-video-file" name="sourceVideoFile" type="file" accept="video/*" required />
+        <label class="field-label" for="reference-images">参考图片（可选，最多5张）</label>
         <input id="reference-images" name="referenceImages" type="file" accept="image/*" multiple />
-        <p class="card-summary card-summary-soft" style="margin-top:-4px;margin-bottom:12px;">不传则纯文本生成视频</p>
         <p id="idle-dialogue-warning" class="card-summary card-summary-soft form-warning is-hidden">
           闲聊语料加载失败，已降级为基础闲聊模式。
         </p>
@@ -1091,6 +1092,14 @@ inputOverlay.addEventListener("submit", async (event) => {
     endingDirection: String(formData.get("endingDirection") || "").trim(),
     stylePreference: String(formData.get("stylePreference") || "auto")
   };
+  const rawSourceVideoFile = formData.get("sourceVideoFile");
+  const sourceVideoFile =
+    rawSourceVideoFile instanceof File && rawSourceVideoFile.size > 0 ? rawSourceVideoFile : null;
+  if (!sourceVideoFile) {
+    alert("请上传一段素材视频，HappyHorse 将对其进行 AI 编辑");
+    return;
+  }
+
   const rawRefImages = formData.getAll("referenceImages");
   const refImageFiles = rawRefImages
     .filter((f) => f instanceof File && f.size > 0)
@@ -1179,19 +1188,27 @@ inputOverlay.addEventListener("submit", async (event) => {
     scriptReviewGenerateBtn.disabled = true;
     scriptReviewProgress.textContent = "视频任务创建中…";
 
-    // Upload reference images (optional, for I2V)
-    let uploadedImageId = null;
+    // Upload source video (required for HappyHorse)
+    renderSystemLine(`上传素材视频中：${sourceVideoFile.name}`);
+    const { upload: videoUpload } = await uploadVideoSource(activeProjectId, sourceVideoFile);
+    renderSystemLine(`视频上传完成：${videoUpload.originalName}`);
+    const videoAssetId = videoUpload.uploadId;
+
+    // Upload reference images (optional)
+    const refImgIds = [];
     for (const imgFile of refImageFiles) {
       renderSystemLine(`上传参考图片：${imgFile.name}`);
       const { upload } = await uploadVideoSource(activeProjectId, imgFile, "image");
       renderSystemLine(`图片上传完成：${upload.originalName}`);
-      if (upload.uploadId && !uploadedImageId) uploadedImageId = upload.uploadId;
+      if (upload.uploadId) refImgIds.push(upload.uploadId);
     }
+
     const { job } = await createProjectVideoJob(activeProjectId);
     renderSystemLine(`视频任务已创建：${job.jobId}`);
     const origin = window.location.origin;
-    const sourceImageUrl = uploadedImageId ? `${origin}/api/assets/${uploadedImageId}/download` : "";
-    if (sourceImageUrl) renderSystemLine(`参考图片已就绪，即将进行 I2V 生成`);
+    const sourceVideoUrl = videoAssetId ? `${origin}/api/assets/${videoAssetId}/download` : "";
+    const refImgUrls = refImgIds.map((id) => `${origin}/api/assets/${id}/download`);
+    if (sourceVideoUrl) renderSystemLine(`素材视频已就绪，即将进行 HappyHorse 编辑`);
     networkHandle.setPhase("collect");
     markTimelinePhase("collect");
 
@@ -1248,7 +1265,8 @@ inputOverlay.addEventListener("submit", async (event) => {
           }
         },
         {
-          imageUrl: sourceImageUrl,
+          videoUrl: sourceVideoUrl,
+          refImageUrls: refImgUrls,
           onDisconnect: () => {
             setStreamRetryAction("重连任务流", async () => {
               renderSystemLine("正在重连任务流…");
