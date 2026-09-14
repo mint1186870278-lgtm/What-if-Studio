@@ -46,6 +46,9 @@ anet-services/
 .env
 .env.*
 
+# Local Codex provider launcher
+/codex-whatif
+
 # Ignore compiled assets
 *.mp4
 node_modules

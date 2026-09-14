@@ -30,6 +30,7 @@ dependencies = [
     "psycopg2-binary>=2.9.0",
     "websockets>=12.0",
     "anet-sdk>=1.1.0",
+    "langgraph-checkpoint-sqlite>=2.0.0",
 ]
 
 [project.optional-dependencies]

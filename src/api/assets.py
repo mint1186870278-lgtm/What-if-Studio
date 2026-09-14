@@ -14,10 +14,11 @@ from src.db import get_db
 from src.models import Project, Asset
 from src.schemas import AssetResponse
 from src.config import settings
+from src.api.auth import require_resource_owner
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter()
+router = APIRouter(dependencies=[Depends(require_resource_owner)])
 
 
 async def extract_asset_metadata(file_path: str) -> dict:
@@ -60,7 +61,9 @@ async def upload_asset(
         asset_dir.mkdir(parents=True, exist_ok=True)
 
         # Save file
-        file_name = file.filename or "unnamed"
+        # UploadFile.filename is client controlled.  Keep only the basename
+        # so a multipart request cannot escape the project asset directory.
+        file_name = Path(file.filename or "unnamed").name or "unnamed"
         file_path = asset_dir / file_name
         file_content = await file.read()
 

@@ -1,9 +1,30 @@
 """Configuration management for the application"""
 
 import os
+import logging
 from pathlib import Path
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from pydantic import field_validator
+
+
+def _sanitize_proxy_environment() -> None:
+    """Remove proxy URLs that httpx cannot parse.
+
+    Some desktop proxy tools export ``ALL_PROXY=socks://...``.  httpx accepts
+    ``socks5://`` only when the optional socksio dependency is installed, and
+    otherwise raises while constructing ChatOpenAI (before any API request).
+    If a valid HTTP(S) proxy is also present, dropping only the malformed
+    ALL_PROXY lets httpx use it; otherwise requests fall back to direct access.
+    """
+    logger = logging.getLogger(__name__)
+    for name in ("ALL_PROXY", "all_proxy"):
+        value = os.environ.get(name, "").strip()
+        if value.lower().startswith("socks://"):
+            os.environ.pop(name, None)
+            logger.warning("Ignoring unsupported %s=%s; use socks5:// with httpx[socks]", name, value)
+
+
+_sanitize_proxy_environment()
 
 
 class Settings(BaseSettings):
@@ -49,6 +70,14 @@ class Settings(BaseSettings):
     port: int = int(os.getenv("PORT", "8000"))
     frontend_dist_dir: Path = Path(os.getenv("FRONTEND_DIST_DIR", "./web/dist"))
     anet_token: str = os.getenv("ANET_TOKEN", "")
+
+    # Resource identity.  In development the browser's X-User-ID fallback is
+    # retained for local demos.  Production should set AUTH_SECRET and pass a
+    # short-lived HS256 Bearer token issued by the deployment gateway.
+    auth_secret: str = os.getenv("AUTH_SECRET", "")
+    auth_issuer: str = os.getenv("AUTH_ISSUER", "")
+    auth_audience: str = os.getenv("AUTH_AUDIENCE", "")
+    auth_allow_unverified_user_header: bool = os.getenv("AUTH_ALLOW_UNVERIFIED_USER_HEADER", "false").lower() in {"1", "true", "yes", "on"}
 
     # Primary LLM (OpenAI-compatible)
     openai_api_key: str = os.getenv("OPENAI_API_KEY", "")

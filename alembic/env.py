@@ -24,6 +24,8 @@ from src.models import (  # noqa: F401 — ensure all models are imported for au
     VideoJob,
     ANetInvocation,
     UserPreference,
+    UserProfile,
+    CreativeExperience,
     ScriptVector,
     DiscussionCheckpoint,
 )

@@ -6,6 +6,7 @@ Gracefully degrades: Mem0 → JSON file, Chroma → in-memory TF-IDF.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import logging
 import os
@@ -71,45 +72,44 @@ class MemoryService:
         return False
 
     async def store_user_preference(self, user_id: str, preference: dict) -> None:
-        """Store a user preference observation."""
-        mem0 = await self._ensure_mem0()
-        if mem0:
-            try:
-                text = json.dumps(preference, ensure_ascii=False)
-                await asyncio.to_thread(
-                    mem0.add,
-                    text,
-                    user_id=user_id,
-                    metadata={"source": preference.get("source", "inferred")},
-                )
-                logger.debug("Mem0: stored preference for %s", user_id)
-                return
-            except Exception as exc:
-                logger.warning("Mem0 store failed (%s), using JSON fallback", exc)
+        """Legacy local preference writer (Mem0 is reserved for cases).
 
-        # JSON fallback
+        New code should use ``PersonalizationService`` and SQL.  This method
+        remains for compatibility but rejects generated/model observations and
+        never writes structured preferences to Mem0.
+        """
+        if not user_id:
+            raise ValueError("user_id is required")
+        preference = dict(preference)
+        source = str(preference.get("source", "user_expression"))
+        if source in {"inferred", "model", "generated"}:
+            logger.info("Ignoring non-user preference observation for %s", user_id)
+            return
         prefs = await self.get_user_preferences(user_id)
-        prefs.append(preference)
+        key = str(preference.get("key") or preference.get("preference_key") or "").strip().lower()
+        value = str(preference.get("value") or preference.get("preference_value") or "").strip().lower()
+        if key and not any(
+            str(item.get("key") or item.get("preference_key") or "").strip().lower() == key
+            and str(item.get("value") or item.get("preference_value") or "").strip().lower() == value
+            for item in prefs
+        ):
+            prefs.append(preference)
         self._prefs_cache[user_id] = prefs
         await self._save_preferences_json(user_id, prefs)
 
     async def get_user_preferences(self, user_id: str) -> list[dict]:
-        """Retrieve all stored preferences for a user."""
-        mem0 = await self._ensure_mem0()
-        if mem0:
-            try:
-                results = await asyncio.to_thread(
-                    mem0.search, "", user_id=user_id, limit=20,
-                )
-                return [
-                    {"key": r.get("memory", ""), "value": r.get("memory", ""),
-                     "source": (r.get("metadata") or {}).get("source", "mem0")}
-                    for r in (results or [])
-                ]
-            except Exception as exc:
-                logger.debug("Mem0 search failed (%s), using JSON fallback", exc)
+        """Retrieve compatibility preferences from an isolated local cache.
 
-        return self._prefs_cache.get(user_id) or await self._load_preferences_json(user_id)
+        Structured SQL rows are authoritative and should be read through the
+        personalization service.  Mem0 is intentionally not queried here.
+        """
+        if not user_id:
+            return []
+        if user_id in self._prefs_cache:
+            return list(self._prefs_cache[user_id])
+        loaded = await self._load_preferences_json(user_id)
+        self._prefs_cache[user_id] = list(loaded)
+        return loaded
 
     async def _save_preferences_json(self, user_id: str, prefs: list[dict]) -> None:
         path = _get_memory_dir() / f"prefs_{_safe_filename(user_id)}.json"
@@ -183,16 +183,35 @@ class MemoryService:
         return doc_id
 
     async def search_similar_scripts(
-        self, query: str, k: int = 3, filter_metadata: dict | None = None,
+        self,
+        query: str,
+        k: int = 3,
+        filter_metadata: dict | None = None,
+        user_id: str | None = None,
     ) -> list[dict]:
-        """Search for similar historical scripts."""
+        """Search historical cases, isolated to one tenant/user.
+
+        A user scope is mandatory for useful retrieval.  When ``user_id`` is
+        omitted we return an empty result instead of accidentally exposing a
+        global corpus.  This is especially important for the JSONL fallback,
+        where a vector database cannot enforce metadata filtering for us.
+        """
+        # ``filter_metadata`` is accepted for backwards compatibility; derive
+        # the tenant key from it when callers have not supplied the explicit
+        # keyword.  Never run an unscoped query against the shared collection.
+        if not user_id and filter_metadata:
+            user_id = str(filter_metadata.get("user_id") or "") or None
+        if not user_id:
+            return []
+        metadata_filter = dict(filter_metadata or {})
+        metadata_filter.setdefault("user_id", str(user_id))
         chroma = await self._ensure_chroma()
         if chroma and self._collection is not None:
             try:
                 embeddings = await self._embed(query)
                 where = (
-                    {k: str(v) for k, v in (filter_metadata or {}).items()}
-                    if filter_metadata else None
+                    {key: str(value) for key, value in metadata_filter.items()}
+                    if metadata_filter else None
                 )
                 results = self._collection.query(
                     query_embeddings=[embeddings] if embeddings else None,
@@ -205,19 +224,34 @@ class MemoryService:
                 docs_list = results.get("documents", [[]])[0]
                 metas_list = results.get("metadatas", [[]])[0]
                 for i in range(min(len(ids_list), len(docs_list))):
+                    metadata = metas_list[i] if i < len(metas_list) else {}
+                    if any(str(metadata.get(key, "")) != str(value) for key, value in metadata_filter.items()):
+                        continue
                     out.append({
                         "id": ids_list[i],
                         "script": docs_list[i][:500],
-                        "metadata": metas_list[i] if i < len(metas_list) else {},
+                        "metadata": metadata,
                     })
                 return out
             except Exception as exc:
                 logger.warning("Chroma search failed (%s), using TF-IDF fallback", exc)
 
-        return await self._search_tfidf(query, k)
+        return await self._search_tfidf(query, k, filter_metadata=metadata_filter)
 
-    async def _search_tfidf(self, query: str, k: int) -> list[dict]:
-        """TF-IDF fallback search over the JSONL file."""
+    async def _search_tfidf(
+        self,
+        query: str,
+        k: int,
+        filter_metadata: dict | None = None,
+        user_id: str | None = None,
+    ) -> list[dict]:
+        """TF-IDF fallback search over JSONL, with strict metadata filtering."""
+        metadata_filter = dict(filter_metadata or {})
+        if user_id:
+            metadata_filter.setdefault("user_id", str(user_id))
+        # Never search a shared fallback corpus without a tenant key.
+        if not metadata_filter.get("user_id"):
+            return []
         path = _get_memory_dir() / "scripts_fallback.jsonl"
         if not path.exists():
             return []
@@ -232,6 +266,11 @@ class MemoryService:
                             records.append(json.loads(line))
                         except json.JSONDecodeError:
                             continue
+            if metadata_filter:
+                def matches(record: dict) -> bool:
+                    metadata = record.get("metadata") or {}
+                    return all(str(metadata.get(key, "")) == str(value) for key, value in metadata_filter.items())
+                records = [record for record in records if matches(record)]
             if not records:
                 return []
             try:
@@ -288,7 +327,7 @@ class MemoryService:
 
         # Use TF-IDF fallback search (fast, no ONNX download needed).
         # Chroma is used only for post-discussion storage (off hot path).
-        similar = await self._search_tfidf(current_prompt, k=2)
+        similar = await self._search_tfidf(current_prompt, k=2, user_id=user_id)
         similar_scripts_count = len(similar)
         if similar:
             parts.append("## 历史相关剧本参考")
@@ -307,14 +346,79 @@ class MemoryService:
     # -- Feedback -------------------------------------------------------------
 
     async def record_feedback(self, user_id: str, script_id: str, feedback: dict) -> None:
-        """Record user feedback on a generated script."""
-        await self.store_user_preference(user_id, {
-            "key": f"feedback_on_{script_id}",
-            "value": json.dumps(feedback, ensure_ascii=False),
-            "source": "explicit",
-            "confidence": 90,
-        })
-        logger.info("Recorded feedback for user %s on script %s", user_id, script_id)
+        """Record feedback as a semantic historical case, not a preference."""
+        await self.store_historical_case(
+            user_id,
+            {
+                "case_ref": script_id,
+                "feedback": dict(feedback),
+                "content": json.dumps(feedback, ensure_ascii=False),
+            },
+        )
+        logger.info("Recorded historical feedback case for user %s on script %s", user_id, script_id)
+
+    async def store_historical_case(self, user_id: str, case: dict[str, Any]) -> str:
+        """Store a semantic historical case in Mem0 when configured.
+
+        Mem0 is deliberately used for *cases* (what happened and what the user
+        changed), not as the authoritative structured preference store.  The
+        JSON/Chroma implementation remains a deterministic fallback.
+        """
+        if not user_id:
+            raise ValueError("user_id is required for historical case storage")
+        payload = dict(case)
+        payload["user_id"] = str(user_id)
+        payload.setdefault("kind", "creative_case")
+        mem0 = await self._ensure_mem0()
+        if mem0:
+            try:
+                text = json.dumps(payload, ensure_ascii=False)
+                result = await asyncio.to_thread(
+                    mem0.add,
+                    text,
+                    user_id=str(user_id),
+                    metadata={"kind": "creative_case", "user_id": str(user_id)},
+                )
+                # Mem0 versions return either an ID or a list of records.
+                if isinstance(result, str):
+                    return result
+                if isinstance(result, list) and result and isinstance(result[0], dict):
+                    return str(result[0].get("id") or result[0].get("memory") or "")
+            except Exception as exc:
+                logger.debug("Mem0 case store failed (%s), using script store fallback", exc)
+        text = payload.get("script") or payload.get("content") or json.dumps(payload, ensure_ascii=False)
+        return await self.store_script(str(text), {"user_id": str(user_id), "kind": "creative_case", **payload})
+
+    async def search_historical_cases(self, user_id: str, query: str, k: int = 3) -> list[dict]:
+        """Retrieve semantic cases for exactly one user."""
+        if not user_id:
+            return []
+        mem0 = await self._ensure_mem0()
+        if mem0:
+            try:
+                results = await asyncio.to_thread(
+                    mem0.search,
+                    query or "creative case",
+                    user_id=str(user_id),
+                    limit=k,
+                )
+                # Defensive filtering: some Mem0 deployments ignore user_id.
+                out = []
+                for result in results or []:
+                    metadata = result.get("metadata") or {}
+                    result_user = metadata.get("user_id") or result.get("user_id")
+                    # Mem0 providers differ in whether they honour the
+                    # user_id filter.  A result without an attributable
+                    # tenant is therefore unsafe to use: accepting it would
+                    # turn a provider quirk into a cross-user data leak.
+                    if result_user is None or str(result_user) != str(user_id):
+                        continue
+                    out.append(result)
+                if out:
+                    return out[:k]
+            except Exception as exc:
+                logger.debug("Mem0 case search failed (%s), using vector fallback", exc)
+        return await self.search_similar_scripts(query, k=k, user_id=str(user_id))
 
 
 def detect_script_tone(script: str) -> str:
@@ -337,7 +441,14 @@ def detect_script_tone(script: str) -> str:
 
 
 def _safe_filename(s: str) -> str:
-    return "".join(c for c in s if c.isalnum() or c in "._-")[:64]
+    """Return a collision-resistant, path-safe user key.
+
+    Sanitizing by removing characters is not sufficient (``a/b`` and ``ab``
+    used to share a file).  A SHA-256 digest gives stable isolation even for
+    long or Unicode IDs while avoiding user-controlled path components.
+    """
+    raw = str(s).encode("utf-8", errors="strict")
+    return hashlib.sha256(raw).hexdigest()
 
 
 # Module-level singleton

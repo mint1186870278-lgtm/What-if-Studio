@@ -93,7 +93,7 @@ async def general_exception_handler(request, exc):
 
 
 # Include API routes
-from src.api import projects, assets, sessions, jobs, gateway, agents, ws, feedback
+from src.api import projects, assets, sessions, jobs, gateway, agents, ws, feedback, personalization, gepa
 
 app.include_router(projects.router, prefix="/api", tags=["projects"])
 app.include_router(assets.router, prefix="/api", tags=["assets"])
@@ -103,6 +103,8 @@ app.include_router(gateway.router, prefix="/api", tags=["gateway"])  # Gateway r
 app.include_router(agents.router, prefix="/api", tags=["agents"])
 app.include_router(ws.router, tags=["websocket"])  # WebSocket for human-in-the-loop
 app.include_router(feedback.router, prefix="/api", tags=["feedback"])
+app.include_router(personalization.router, prefix="/api", tags=["personalization"])
+app.include_router(gepa.router, prefix="/api", tags=["gepa"])
 
 
 def resolve_frontend_dist_dir() -> Path:

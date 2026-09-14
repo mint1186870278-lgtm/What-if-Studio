@@ -911,6 +911,25 @@ button {
   to { stroke-dashoffset: -24; }
 }
 
+/* --- Interaction card --- */
+.interaction-card {
+  margin: 0 12px 10px;
+  padding: 12px;
+  border: 1px solid rgba(201, 168, 76, 0.55);
+  border-radius: 10px;
+  background: rgba(38, 31, 16, 0.9);
+}
+.interaction-card.is-hidden { display: none; }
+.interaction-card-head { display:flex; justify-content:space-between; color:var(--accent); font-size:11px; letter-spacing:.08em; }
+.interaction-question { margin:10px 0; line-height:1.5; font-size:13px; }
+.interaction-options { display:flex; flex-wrap:wrap; gap:6px; }
+.interaction-option-btn, .interaction-decide-btn { border:1px solid rgba(201,168,76,.6); border-radius:6px; padding:7px 10px; background:rgba(201,168,76,.14); color:var(--text); cursor:pointer; font:inherit; font-size:12px; }
+.interaction-option-btn:hover, .interaction-decide-btn:hover { background:rgba(201,168,76,.28); }
+.interaction-free-form { display:flex; gap:6px; margin-top:8px; }
+.interaction-free-form.is-hidden { display:none; }
+.interaction-decide-btn { margin-top:8px; width:100%; }
+.interaction-status { margin-top:7px; color:var(--muted); font-size:11px; min-height:1em; }
+
 /* --- Intervention bar --- */
 .intervene-bar {
   display: flex;

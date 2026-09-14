@@ -1,9 +1,9 @@
 """Pydantic schemas for request/response validation"""
 
 from datetime import datetime
-from typing import Optional, List, Any
+from typing import Optional, List, Any, Literal
 from uuid import UUID
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 
 # Project schemas
@@ -44,8 +44,7 @@ class ProjectResponse(BaseModel):
     updated_at: datetime
     metadata_: dict
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 # Asset schemas
@@ -72,8 +71,7 @@ class AssetResponse(BaseModel):
     created_at: datetime
     updated_at: datetime
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 # Session schemas
@@ -104,12 +102,13 @@ class SessionResponse(BaseModel):
     style_preference: str
     status: str
     script: Optional[str]
-    discussion_history: List[DiscussionTurn]
+    # Lifecycle events such as awaiting_input/paused are persisted alongside
+    # director turns so a refreshed client can reconstruct a resumable run.
+    discussion_history: List[Any]
     created_at: datetime
     updated_at: datetime
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 # VideoJob schemas
@@ -133,8 +132,7 @@ class VideoJobResponse(BaseModel):
     created_at: datetime
     updated_at: datetime
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 # Gateway schemas
@@ -149,8 +147,7 @@ class ANetInvocationResponse(BaseModel):
     error: Optional[str]
     timestamp: datetime
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class GatewayCapability(BaseModel):
@@ -191,6 +188,110 @@ class FeedbackResponse(BaseModel):
     status: str = "ok"
     message: str
     feedback_id: Optional[str] = None
+
+
+# ---------------------------------------------------------------------------
+# Personalization / user memory schemas
+# ---------------------------------------------------------------------------
+
+class UserProfileResponse(BaseModel):
+    """Authoritative structured long-term profile for one user."""
+
+    id: UUID
+    user_id: str
+    ending_tendency: Optional[str] = None
+    emotional_style: Optional[str] = None
+    original_fidelity: Optional[str] = None
+    profile_data: dict = Field(default_factory=dict)
+    version: int = 1
+    evidence_count: int = 0
+    last_evidence_source: Optional[str] = None
+    last_evidence_ref: Optional[str] = None
+    created_at: datetime
+    updated_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class UserProfileUpdate(BaseModel):
+    """Explicit profile update; omitted fields are left unchanged."""
+
+    ending_tendency: Optional[str] = None
+    emotional_style: Optional[str] = None
+    original_fidelity: Optional[str] = None
+    profile_data: Optional[dict] = None
+    evidence_source: str = "user_expression"
+    evidence_ref: Optional[str] = None
+
+
+class PreferenceObservationCreate(BaseModel):
+    """A user-originated observation, never a generated-script inference."""
+
+    key: str = Field(..., min_length=1, max_length=255)
+    value: str = Field(..., min_length=1)
+    scope: Literal["global", "project", "session", "request"] = "global"
+    project_id: Optional[str] = None
+    session_id: Optional[str] = None
+    applicability_condition: Optional[str] = None
+    source: Literal["user_expression", "user_choice", "user_edit", "explicit_feedback"] = "user_expression"
+    evidence_ref: Optional[str] = None
+    confidence: float = Field(default=0.8, ge=0, le=1)
+
+
+class UserPreferenceResponse(BaseModel):
+    id: UUID
+    user_id: str
+    preference_key: str
+    preference_value: Optional[str] = None
+    scope: str = "global"
+    project_id: Optional[str] = None
+    session_id: Optional[str] = None
+    applicability_condition: Optional[str] = None
+    evidence_source: Optional[str] = None
+    evidence_ref: Optional[str] = None
+    confidence: float = 0.5
+    source: str = "user_expression"
+    version: int = 1
+    status: str = "active"
+    is_long_term: bool = True
+    created_at: datetime
+    updated_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class ExperienceCreate(BaseModel):
+    """ACE-style scene → advice → user evidence entry."""
+
+    applicable_condition: str = Field(..., min_length=1)
+    advice: str = Field(..., min_length=1)
+    user_evidence: str = Field(..., min_length=1)
+    evidence_source: Literal["user_expression", "user_choice", "user_edit", "explicit_feedback"] = "explicit_feedback"
+    evidence_ref: Optional[str] = None
+    project_id: Optional[str] = None
+    session_id: Optional[str] = None
+    confidence: float = Field(default=0.8, ge=0, le=1)
+
+
+class ExperienceResponse(BaseModel):
+    id: UUID
+    user_id: str
+    applicable_condition: str
+    advice: str
+    user_evidence: str
+    evidence_source: str
+    evidence_ref: Optional[str] = None
+    project_id: Optional[str] = None
+    session_id: Optional[str] = None
+    confidence: float
+    version: int
+    status: str
+    usage_count: int
+    last_used_at: Optional[datetime] = None
+    created_at: datetime
+    updated_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)
 
 
 # Output format selection
@@ -237,3 +338,67 @@ class InterveneRequest(BaseModel):
     """Request to inject user intervention via REST"""
 
     text: str
+
+
+class SessionResumeRequest(BaseModel):
+    """Answer a native LangGraph interaction question.
+
+    Clients have historically called intervention payloads ``text`` while
+    the new interaction UI uses ``answer``/``selected_option``.  Accept all
+    of these wire representations and normalize them at the API boundary so
+    the graph always receives one plain string.
+    """
+
+    # ``Any`` is intentional: LangGraph's interrupt contract permits a JSON
+    # answer object (for example ``{"selected_option": "更忠实原作"}``) as
+    # well as a plain string.  The graph's answer node normalizes both forms.
+    answer: Any = None
+    text: Any = None
+    selected_option: Any = None
+    free_text: Any = None
+    question_id: Optional[str] = None
+
+    def resolved_answer(self) -> Any:
+        for value in (self.answer, self.text, self.free_text, self.selected_option):
+            if value is None:
+                continue
+            if isinstance(value, str):
+                if value.strip():
+                    return value.strip()
+            elif value != "":
+                return value
+        return ""
+
+# GEPA prompt optimisation schemas
+class GEPACandidateCreate(BaseModel):
+    strategy: str = Field(..., min_length=1, max_length=128)
+    prompt_template: str = Field(..., min_length=1)
+    model: Optional[str] = None
+    budget: Optional[int] = Field(None, ge=1, le=1000)
+
+
+class GEPAEvaluateRequest(BaseModel):
+    cases: List[dict] = Field(default_factory=list)
+    # Optional held-out set.  When ``independent`` is true this set is scored
+    # instead of the training cases, while retaining backwards compatibility
+    # for callers that only provide ``cases``.
+    independent_cases: List[dict] = Field(default_factory=list)
+    stage: Literal["profile_baseline", "experience", "optimized"] = "optimized"
+    independent: bool = False
+
+
+class GEPAProposalRequest(BaseModel):
+    strategy: str = Field(..., min_length=1, max_length=128)
+    cases: List[dict] = Field(default_factory=list)
+    seed_prompt: Optional[str] = None
+    model: Optional[str] = None
+    budget: Optional[int] = Field(None, ge=1, le=1000)
+
+
+class GEPAOptimizeRequest(GEPAProposalRequest):
+    independent_cases: List[dict] = Field(default_factory=list)
+    min_score: float = Field(0.7, ge=0, le=1)
+
+
+class GEPAPublishRequest(BaseModel):
+    min_score: float = Field(0.7, ge=0, le=1)

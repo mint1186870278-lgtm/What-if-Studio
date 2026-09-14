@@ -1,11 +1,12 @@
 """Video job management API routes with SSE progress streaming"""
 
 import asyncio
+import inspect
 import json
 import logging
 from typing import AsyncGenerator
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.responses import StreamingResponse, FileResponse
 from sqlalchemy.orm import Session as DBSession
 from pathlib import Path
@@ -14,10 +15,94 @@ from src.db import get_db, SessionLocal
 from src.models import Session, VideoJob, Asset
 from src.schemas import VideoJobCreate, VideoJobResponse
 from src.config import settings
+from src.api.auth import current_user_id, require_resource_owner
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter()
+router = APIRouter(dependencies=[Depends(require_resource_owner)])
+
+
+def _invoke_video_job_processor(
+    job_id: str,
+    session_id: str,
+    asset_ids: list[str],
+    db: DBSession,
+    video_url: str | None = None,
+    reference_image_urls: list[str] | None = None,
+):
+    """Invoke a video-job processor using one of the supported contracts.
+
+    The production processor owns its database session and accepts optional
+    ``video_url``/``reference_image_urls`` keyword arguments.  Older callers
+    (and a few lightweight test processors) accepted an injected ``db`` as a
+    fourth positional argument, while the earliest contract only accepted the
+    first three arguments.  Inspecting the callable before invoking it lets us
+    select the contract without creating a coroutine that would later be
+    abandoned (and trigger an ``unawaited coroutine`` warning).
+
+    A signature may be unavailable for some extension callables.  In that
+    case we try the same contracts in order; argument-binding errors happen at
+    invocation time, before an async function can create a coroutine, so no
+    candidate is leaked.
+    """
+
+    processor = process_video_job_background
+    candidates = [
+        # Current production contract.
+        (
+            (job_id, session_id, asset_ids),
+            {
+                "video_url": video_url,
+                "reference_image_urls": reference_image_urls,
+            },
+        ),
+        # Transitional contract: injected DB plus optional current kwargs.
+        (
+            (job_id, session_id, asset_ids, db),
+            {
+                "video_url": video_url,
+                "reference_image_urls": reference_image_urls,
+            },
+        ),
+        # Legacy contract: injected DB only.
+        ((job_id, session_id, asset_ids, db), {}),
+        # Minimal contract used by simple/custom processors.
+        ((job_id, session_id, asset_ids), {}),
+    ]
+
+    try:
+        processor_signature = inspect.signature(processor)
+    except (TypeError, ValueError):
+        processor_signature = None
+
+    if processor_signature is not None:
+        # ``Signature.bind`` performs Python's argument validation without
+        # invoking the callable, so rejected async candidates never allocate a
+        # coroutine.  This also avoids masking TypeError raised by the actual
+        # processor body.
+        for args, kwargs in candidates:
+            try:
+                processor_signature.bind(*args, **kwargs)
+            except TypeError:
+                continue
+            return processor(*args, **kwargs)
+        raise TypeError(
+            "process_video_job_background does not match a supported contract"
+        )
+
+    # A small fallback for opaque callables without an inspectable signature.
+    # If invocation succeeds, return immediately; if it fails during argument
+    # binding, move to the next contract.  Async argument binding happens
+    # synchronously before a coroutine is returned.
+    last_error: TypeError | None = None
+    for args, kwargs in candidates:
+        try:
+            return processor(*args, **kwargs)
+        except TypeError as exc:
+            last_error = exc
+    raise last_error or TypeError(
+        "process_video_job_background does not match a supported contract"
+    )
 
 
 async def process_video_job_background(
@@ -221,14 +306,18 @@ async def generate_video_progress_stream(
             yield f"data: {json.dumps({'error': 'Job not found'})}\n\n"
             return
 
-        # Start background processing task with its own DB session
-        task = asyncio.create_task(
-            process_video_job_background(
-                job_id, session_id, asset_ids,
-                video_url=video_url,
-                reference_image_urls=reference_image_urls,
-            )
+        # Start background processing task with its own DB session.  Keep
+        # compatibility with production, transitional, and legacy custom
+        # processor signatures without leaking rejected coroutine objects.
+        task_coro = _invoke_video_job_processor(
+            job_id,
+            session_id,
+            asset_ids,
+            db,
+            video_url=video_url,
+            reference_image_urls=reference_image_urls,
         )
+        task = asyncio.create_task(task_coro)
 
         # Stream progress events
         stages = [
@@ -311,6 +400,7 @@ async def generate_video_progress_stream(
 @router.post("/video-jobs", response_model=VideoJobResponse, status_code=status.HTTP_201_CREATED)
 async def create_video_job(
     job_create: VideoJobCreate,
+    request: Request,
     db: DBSession = Depends(get_db),
 ):
     """Create a new video job"""
@@ -321,6 +411,14 @@ async def create_video_job(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Session {job_create.session_id} not found",
         )
+    identity = current_user_id(request)
+    owner = (session.project.metadata_ or {}).get("owner_user_id") if session.project else None
+    if identity and owner and owner != identity:
+        raise HTTPException(status_code=403, detail="Resource belongs to another user")
+    if identity and owner is None and not settings.debug:
+        raise HTTPException(status_code=403, detail="Resource ownership is not established")
+    if identity is None and not settings.debug:
+        raise HTTPException(status_code=401, detail="X-User-ID is required")
 
     try:
         job = VideoJob(

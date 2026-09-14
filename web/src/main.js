@@ -1,8 +1,10 @@
 import "./style.css";
+import { mountLanding } from "./landing.js";
 import { parseCreativeSession } from "./sessionSchema";
 import { createNetwork } from "./network";
 import {
   createProject,
+  listProjects,
   createProjectVideoJob,
   fetchAgents,
   getProject,
@@ -19,6 +21,7 @@ import {
   generateStoryboard,
   confirmStoryboard,
   getScriptExportUrl,
+  resumeDiscussion,
 } from "./api";
 import { getDisplayName } from "./displayNames";
 import { createIdleDialogueEngine } from "./idleDialogueEngine";
@@ -108,6 +111,20 @@ app.innerHTML = `
           <span data-phase="deliver">deliver</span>
         </div>
         <div class="live-feed" id="live-feed"></div>
+        <section id="interaction-card" class="interaction-card is-hidden" aria-live="polite">
+          <div class="interaction-card-head">
+            <span class="interaction-card-kicker">需要你的决定</span>
+            <span id="interaction-stage" class="interaction-card-stage">DECISION</span>
+          </div>
+          <p id="interaction-question" class="interaction-question"></p>
+          <div id="interaction-options" class="interaction-options"></div>
+          <div id="interaction-free-form" class="interaction-free-form">
+            <input id="interaction-input" class="intervene-input" type="text" placeholder="也可以直接输入你的想法…" />
+            <button type="button" id="interaction-submit-btn" class="intervene-send-btn">提交</button>
+          </div>
+          <button type="button" id="interaction-decide-btn" class="interaction-decide-btn">你决定</button>
+          <div id="interaction-status" class="interaction-status" role="status"></div>
+        </section>
         <div id="intervene-bar" class="intervene-bar is-hidden">
           <input type="text" id="intervene-input" class="intervene-input" placeholder="随时输入你的想法注入讨论..." />
           <button type="button" id="intervene-send-btn" class="intervene-send-btn">发送</button>
@@ -258,6 +275,15 @@ const interveneInput = document.querySelector("#intervene-input");
 const interveneSendBtn = document.querySelector("#intervene-send-btn");
 const intervenePauseBtn = document.querySelector("#intervene-pause-btn");
 const storyboardPreview = document.querySelector("#storyboard-preview");
+const interactionCard = document.querySelector("#interaction-card");
+const interactionStage = document.querySelector("#interaction-stage");
+const interactionQuestion = document.querySelector("#interaction-question");
+const interactionOptions = document.querySelector("#interaction-options");
+const interactionFreeForm = document.querySelector("#interaction-free-form");
+const interactionInput = document.querySelector("#interaction-input");
+const interactionSubmitBtn = document.querySelector("#interaction-submit-btn");
+const interactionDecideBtn = document.querySelector("#interaction-decide-btn");
+const interactionStatus = document.querySelector("#interaction-status");
 const storyboardActions = document.querySelector("#storyboard-actions");
 const storyboardConfirmBtn = document.querySelector("#storyboard-confirm-btn");
 const storyboardFeedback = document.querySelector("#storyboard-feedback");
@@ -265,6 +291,7 @@ const scriptExportLink = document.querySelector("#script-export-link");
 const outputFormatRadios = document.querySelectorAll("input[name=\"output-type\"]");
 const memoryBadge = document.querySelector("#memory-badge");
 const memoryBadgeText = document.querySelector("#memory-badge-text");
+const studioWorkspace = app.querySelector(".app-shell");
 
 // --- User identity for cross-session memory ---
 function getUserId() {
@@ -312,6 +339,44 @@ let discussionPlaybackQueue = [];
 let discussionPlaybackDone = false;
 const discussionChunkBySpeaker = new Map();
 let renderedTurnKeys = null;
+let pendingInteraction = null;
+let discussionPaused = false;
+let discussionWaitPromise = null;
+let discussionWaitResolve = null;
+let interactionResumeInFlight = false;
+
+// The archive is the public entry point; `/studio` (or an existing project
+// query) keeps the established creative workspace available unchanged.
+mountLanding({
+  workspace: studioWorkspace,
+  onListProjects: () => {
+    // Establish the browser tenant before listing existing work so the
+    // backend can apply owner filtering even before the first new project.
+    getUserId();
+    return listProjects();
+  },
+  onOpenProject: async (project) => {
+    const projectId = String(project?.id || "").trim();
+    if (!projectId) return;
+    setProjectQuery(projectId);
+    latestSessionTitle = String(project.name || "");
+    await loadProjectFromQuery();
+  },
+});
+
+// Selecting a title from the archive starts a fresh project rather than
+// silently overwriting a project that happened to be open before returning to
+// the landing page.  The form values themselves are populated by the archive
+// module, while the existing submit handler remains responsible for creation.
+window.addEventListener("whatif:archive-selection", (event) => {
+  const selection = event.detail || {};
+  if (!selection.workId) return;
+  activeProjectId = null;
+  latestGeneratedScript = "";
+  latestDiscussionTranscript = [];
+  setProjectQuery(null);
+  latestSessionTitle = String(selection.workTitle || "");
+});
 
 function setProjectQuery(projectId) {
   const url = new URL(window.location.href);
@@ -636,6 +701,75 @@ function calcPlaybackDelay(text, fallback = 760) {
 
 async function replayDiscussionEvent(turn) {
   if (!sessionRunning || activeChatChannel !== "live") return;
+  if (turn.event === "requirements_parsed" || turn.type === "requirements_parsed") {
+    ensureDiscussionSection("briefing");
+    renderSystemLine("需求已解析，导演组将共享同一份 CreativeBrief。");
+    latestDiscussionTranscript.push("系统：需求已解析，导演组将共享同一份 CreativeBrief。");
+    return;
+  }
+  if (turn.event === "memory_loaded" || turn.type === "memory_loaded") {
+    if (turn.preferences_count > 0 || turn.similar_scripts > 0) {
+      const message = `🧠 记忆系统已加载：${turn.preferences_count || 0} 条偏好，${turn.similar_scripts || 0} 个相似历史剧本`;
+      renderSystemLine(message);
+      latestDiscussionTranscript.push(`系统：${message}`);
+      setUserMemorySummary({
+        preferences_count: turn.preferences_count || 0,
+        similar_scripts: turn.similar_scripts || 0,
+        lastLoaded: new Date().toISOString(),
+        userId: getUserId(),
+      });
+    }
+    return;
+  }
+  if (turn.event === "awaiting_input" || turn.type === "awaiting_input") {
+    discussionPaused = true;
+    renderInteractionQuestion(turn);
+    return;
+  }
+  if (turn.event === "paused" || turn.type === "paused") {
+    discussionPaused = true;
+    renderSystemLine("导演组已暂停，等待你的决定。");
+    return;
+  }
+  if (turn.event === "answer_applied" || turn.type === "answer_applied") {
+    renderSystemLine("✓ 已记录你的决定，导演组继续讨论。");
+    latestDiscussionTranscript.push(`系统：已记录用户决定（${turn.answer || ""}）`);
+    hideInteractionQuestion();
+    interactionResumeInFlight = false;
+    return;
+  }
+  if (turn.event === "interaction_suggestion" || turn.type === "interaction_suggestion") {
+    renderSystemLine(`导演建议：${turn.message || "请结合当前方向继续"}`);
+    latestDiscussionTranscript.push(`系统：导演建议：${turn.message || "请结合当前方向继续"}`);
+    return;
+  }
+  if (turn.event === "script" || turn.type === "script") {
+    latestGeneratedScript = String(turn.script || "");
+    return;
+  }
+  if (turn.event === "task_result" || turn.type === "task_result") {
+    discussionPaused = false;
+    interactionResumeInFlight = false;
+    if (discussionWaitResolve) {
+      const resolve = discussionWaitResolve;
+      discussionWaitResolve = null;
+      discussionWaitPromise = null;
+      resolve();
+    }
+    return;
+  }
+  if (turn.event === "user_intervention" || turn.type === "user_intervention") {
+    renderMessageLine("user", turn.content || "");
+    latestDiscussionTranscript.push(`用户：${turn.content || ""}`);
+    return;
+  }
+  if (turn.event === "director_joined" || turn.type === "director_joined") {
+    const speaker = String(turn.speaker || "导演");
+    const message = `${resolveSpeakerDisplayName(speaker)} 已加入讨论`;
+    renderSystemLine(message);
+    latestDiscussionTranscript.push(`系统：${message}`);
+    return;
+  }
   if (turn.event === "turn_chunk" || turn.type === "turn_chunk") {
     const speaker = String(turn.speaker || "").trim();
     const chunk = String(turn.content || "");
@@ -721,53 +855,90 @@ async function replayDiscussionEvents() {
   }
 }
 
-async function replayDiscussionEvents_DEPRECATED(events) {
-  for (const turn of events) {
-    if (!sessionRunning || activeChatChannel !== "live") return;
-    if (turn.event === "turn" || turn.type === "turn") {
-      const speakerAgent = allAgents.find((agent) => agent.name === turn.speaker);
-      ensureDiscussionSection(turn.stage);
-      renderMessageLine(turn.speaker, turn.content);
-      latestDiscussionTranscript.push(`${resolveSpeakerDisplayName(turn.speaker)}：${turn.content}`);
-      if (speakerAgent) {
-        updateActiveAgentsFromNames([turn.speaker], turn.speaker);
-        networkHandle.showAgentSpeech(speakerAgent.agentId, turn.content, {
-          duration: 30000,
-          force: true,
-          append: true
-        });
-      }
-      await sleep(calcPlaybackDelay(turn.content, 900));
-      continue;
-    }
-    if (turn.event === "topic" || turn.type === "topic") {
-      ensureDiscussionSection(turn.stage);
-      renderSystemLine(`${turn.title}｜${turn.goal}`);
-      latestDiscussionTranscript.push(`系统｜${turn.title}：${turn.goal}`);
-      await sleep(calcPlaybackDelay(`${turn.title}${turn.goal}`, 780));
-      continue;
-    }
-    if (turn.event === "system" || turn.type === "system") {
-      ensureDiscussionSection(turn.stage);
-      renderSystemLine(turn.content);
-      latestDiscussionTranscript.push(`系统：${turn.content}`);
-      await sleep(calcPlaybackDelay(turn.content, 700));
-      continue;
-    }
-    if (turn.event === "summary" || turn.type === "summary") {
-      ensureDiscussionSection(turn.stage);
-      renderSummaryLine(turn.content);
-      latestDiscussionTranscript.push(`总结：${turn.content}`);
-      await sleep(calcPlaybackDelay(turn.content, 820));
-      continue;
-    }
-    if (turn.event === "done" || turn.type === "done") {
-      renderSummaryLine("讨论结论已达成，剧组进入制作管线。");
-      latestDiscussionTranscript.push("系统：讨论结论已达成，剧组进入制作管线。");
-      renderSectionLine("pipeline");
-      await sleep(640);
-    }
+function hideInteractionQuestion() {
+  pendingInteraction = null;
+  interactionCard.classList.add("is-hidden");
+  interactionOptions.innerHTML = "";
+  interactionInput.value = "";
+  interactionStatus.textContent = "";
+}
+
+function renderInteractionQuestion(event) {
+  const question = event?.question || event || {};
+  pendingInteraction = {
+    ...question,
+    id: String(event?.question_id || question.id || "").trim(),
+    stage: event?.stage || question.stage || "decision",
+  };
+  interactionStage.textContent = String(pendingInteraction.stage || "decision").toUpperCase();
+  interactionSubmitBtn.disabled = false;
+  interactionDecideBtn.disabled = false;
+  interactionQuestion.textContent = String(pendingInteraction.question || "导演组需要你的意见");
+  interactionOptions.innerHTML = "";
+  const options = Array.isArray(pendingInteraction.options) ? pendingInteraction.options : [];
+  options.forEach((option) => {
+    const value = typeof option === "string" ? option : (option?.value ?? option?.label ?? "");
+    const label = typeof option === "string" ? option : (option?.label ?? value);
+    if (!String(value).trim()) return;
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "interaction-option-btn";
+    button.textContent = String(label);
+    button.dataset.value = String(value);
+    button.addEventListener("click", () => submitInteractionAnswer({ selected_option: String(value) }));
+    interactionOptions.appendChild(button);
+  });
+  interactionFreeForm.classList.toggle("is-hidden", pendingInteraction.allow_free_text === false);
+  interactionDecideBtn.classList.toggle("is-hidden", pendingInteraction.allow_decide === false);
+  interactionCard.classList.remove("is-hidden");
+  interactionStatus.textContent = "请选择一个方向，或输入你的想法。";
+  interactionInput.focus();
+}
+
+function waitForInteractionResume() {
+  if (!discussionWaitPromise) {
+    discussionWaitPromise = new Promise((resolve) => { discussionWaitResolve = resolve; });
   }
+  return discussionWaitPromise;
+}
+
+async function submitInteractionAnswer(answer) {
+  if (!pendingInteraction || interactionResumeInFlight || !wsSessionId) return;
+  const freeText = interactionInput.value.trim();
+  const payload = { question_id: pendingInteraction.id };
+  if (answer?.selected_option) payload.selected_option = answer.selected_option;
+  else if (freeText) payload.free_text = freeText;
+  else if (answer?.answer) payload.answer = answer.answer;
+  else if (answer?.decide) payload.answer = "你决定";
+  else return;
+  interactionResumeInFlight = true;
+  interactionStatus.textContent = "正在恢复讨论…";
+  interactionSubmitBtn.disabled = true;
+  interactionDecideBtn.disabled = true;
+  interactionOptions.querySelectorAll("button").forEach((button) => { button.disabled = true; });
+  try {
+    await resumeDiscussion(wsSessionId, payload, handleDiscussionEvent, {
+      fallbackProjectId: activeProjectId,
+      preferProject: true,
+    });
+  } catch (error) {
+    interactionStatus.textContent = `恢复失败：${error.message}`;
+    interactionResumeInFlight = false;
+    interactionSubmitBtn.disabled = false;
+    interactionDecideBtn.disabled = false;
+    interactionOptions.querySelectorAll("button").forEach((button) => { button.disabled = false; });
+  }
+}
+
+function handleDiscussionEvent(turn) {
+  if (!turn) return;
+  if (turn.type === "awaiting_input") {
+    discussionPaused = true;
+  }
+  if (turn.type === "paused") {
+    discussionPaused = true;
+  }
+  discussionPlaybackQueue.push(turn);
 }
 
 function openLive(question) {
@@ -790,6 +961,11 @@ function openLive(question) {
   clearStreamRetryAction();
   discussionChunkBySpeaker.clear();
   renderedTurnKeys = new Set();
+  hideInteractionQuestion();
+  discussionPaused = false;
+  discussionWaitPromise = null;
+  discussionWaitResolve = null;
+  interactionResumeInFlight = false;
   lastPhaseSection = "";
   ensureDiscussionSection("briefing");
   renderSystemLine("导演组就位，讨论系统启动。");
@@ -815,6 +991,13 @@ function closeLive() {
   closeInterventionWebSocket();
   wsSessionId = null;
   isPaused = false;
+  hideInteractionQuestion();
+  discussionPaused = false;
+  if (discussionWaitResolve) {
+    discussionWaitResolve();
+    discussionWaitResolve = null;
+    discussionWaitPromise = null;
+  }
 }
 
 function hideResultOverlay() {
@@ -1118,6 +1301,15 @@ intervenePauseBtn.addEventListener("click", () => {
   }
 });
 
+interactionSubmitBtn.addEventListener("click", () => submitInteractionAnswer());
+interactionInput.addEventListener("keydown", (event) => {
+  if (event.key === "Enter") {
+    event.preventDefault();
+    submitInteractionAnswer();
+  }
+});
+interactionDecideBtn.addEventListener("click", () => submitInteractionAnswer({ decide: true }));
+
 function phaseLabel(phase) {
   if (phase === "collect") return "collect";
   if (phase === "analyze") return "analyze";
@@ -1149,11 +1341,6 @@ function updateActiveAgentsFromNames(names, leadName = null) {
   const leadCandidateId = allAgents.find((agent) => agent.name === leadName)?.agentId || null;
   const leadId = leadCandidateId && currentRoleBuckets.participants.has(leadCandidateId) ? leadCandidateId : null;
   networkHandle.setActiveAgents(ids, leadId);
-}
-
-function isParticipantAgentId(agentId) {
-  if (!agentId) return false;
-  return currentRoleBuckets.participants.has(agentId);
 }
 
 function showResult(result) {
@@ -1274,6 +1461,9 @@ inputOverlay.addEventListener("submit", async (event) => {
   }
 
   toggleOverlayCollapsed(true);
+  // Establish the local tenant before creating the project so the backend can
+  // bind ownership and future memory writes to the same identity.
+  const currentUserId = getUserId();
   latestSessionTitle = payload.workTitle || "未命名作品";
   spotlightCard.classList.add("is-hidden");
   setRoleBuckets(pickRoleBuckets(allAgents, payload));
@@ -1332,40 +1522,19 @@ inputOverlay.addEventListener("submit", async (event) => {
         },
         onClose: () => console.log("[ws] intervention channel closed"),
       });
-      const currentUserId = getUserId();
       await streamProjectDiscussion(activeProjectId, (turn) => {
         if (turn.type === "error" || turn.event === "error") {
           playbackError = new Error(String(turn.message || turn.error || "讨论失败"));
           return;
         }
-        if (turn.type === "script") {
-          latestGeneratedScript = String(turn.script || "");
-          return;
-        }
-        // Handle new SSE event types from backend
-        if (turn.type === "awaiting_input") {
-          // Question rendered via WS "question" message instead (no duplicate)
-          return;
-        }
-        if (turn.type === "user_intervention") {
-          renderMessageLine("user", turn.content || "");
-          return;
-        }
-        if (turn.type === "memory_loaded") {
-          if (turn.preferences_count > 0 || turn.similar_scripts > 0) {
-            const msg = `🧠 记忆系统已加载：${turn.preferences_count} 条偏好，${turn.similar_scripts} 个相似历史剧本`;
-            renderSystemLine(msg);
-            setUserMemorySummary({
-              preferences_count: turn.preferences_count,
-              similar_scripts: turn.similar_scripts,
-              lastLoaded: new Date().toISOString(),
-              userId: currentUserId,
-            });
-          }
-          return;
-        }
-        discussionPlaybackQueue.push(turn);
+        handleDiscussionEvent(turn);
       }, { userId: currentUserId });
+      // Native LangGraph streams terminate at an interrupt. Keep the playback
+      // loop alive and wait until the answer has been applied and the resumed
+      // stream finishes (or pauses again) before advancing to script review.
+      while (discussionPaused) {
+        await waitForInteractionResume();
+      }
       discussionPlaybackDone = true;
       await playbackTask;
       if (playbackError) throw playbackError;
@@ -1388,7 +1557,11 @@ inputOverlay.addEventListener("submit", async (event) => {
     scriptReviewGenerateBtn.disabled = true;
 
     // Save output format preference
-    try { await selectOutputFormat(activeProjectId, chosenOutput); } catch {}
+    try {
+      await selectOutputFormat(activeProjectId, chosenOutput);
+    } catch (error) {
+      console.debug("Unable to persist output format", error);
+    }
 
     // --- Handle "script_only" ---
     if (chosenOutput === "script_only") {

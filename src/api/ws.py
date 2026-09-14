@@ -40,6 +40,34 @@ pause_events: dict[str, asyncio.Event] = {}
 @router.websocket("/ws/{session_id}")
 async def discussion_websocket(websocket: WebSocket, session_id: str):
     """WebSocket for real-time user intervention during LangGraph discussion."""
+    # WebSocket routes do not run the HTTP router dependencies.  Repeat the
+    # lightweight resource-owner check before accepting the connection.
+    from src.api.auth import current_user_id
+    from src.config import settings
+    from src.db import SessionLocal
+    from src.models import Project, Session as DBSession
+
+    try:
+        identity = current_user_id(websocket)  # headers/query are shared by Request/WebSocket
+    except Exception as exc:
+        await websocket.close(code=4401, reason=str(exc))
+        return
+    db = SessionLocal()
+    try:
+        session = db.query(DBSession).filter(DBSession.id == str(session_id)).first()
+        project = session.project if session and session.project else db.query(Project).filter(Project.id == str(session_id)).first()
+        owner = (project.metadata_ or {}).get("owner_user_id") if project else None
+        if identity is None and not settings.debug:
+            await websocket.close(code=4401, reason="X-User-ID or bearer token is required")
+            return
+        if identity and owner and owner != identity:
+            await websocket.close(code=4403, reason="Resource belongs to another user")
+            return
+        if identity and owner is None and not settings.debug:
+            await websocket.close(code=4403, reason="Resource ownership is not established")
+            return
+    finally:
+        db.close()
     await websocket.accept()
     active_connections[session_id] = websocket
     logger.info("WebSocket connected for session %s", session_id)

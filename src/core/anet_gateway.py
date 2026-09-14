@@ -14,8 +14,6 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from src.agents import dispatch_autogen_service
-
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
@@ -166,7 +164,7 @@ async def call_service(
     service_name: str,
     payload: dict[str, Any],
 ) -> dict[str, Any]:
-    """Invoke a service through local handlers first, then ANet mesh if needed.
+    """Invoke a service through the ANet mesh.
 
     Parameters
     ----------
@@ -178,16 +176,10 @@ async def call_service(
     Returns
     -------
     dict
-        Response from local handler or ANet peer; when neither is available,
-        a mocked envelope is returned for non-crashing behavior.
+        Response from an ANet peer, or an explicit unavailable envelope when
+        the daemon/peer is not reachable.  AutoGen discussion dispatch stays
+        in the discussion domain and is never used as an ANet fallback.
     """
-    # ── Tier 1: local AutoGen dispatch ──
-    try:
-        return await dispatch_autogen_service(service_name, payload)
-    except Exception as exc:
-        logger.debug("Local autogen dispatch failed: %s", exc)
-
-    # ── Tier 2: ANet P2P mesh ──
     _ensure_probed()
     if _DAEMON_READY and _SVC_CLIENT is not None:
         try:
@@ -211,12 +203,11 @@ async def call_service(
         except Exception as exc:
             logger.warning("ANet P2P call failed: %s", exc)
 
-    # ── Tier 3: mocked fallback ──
     return {
         "service": service_name,
-        "status": "mocked",
+        "status": "unavailable",
         "payload_summary": {k: type(v).__name__ for k, v in payload.items()},
-        "message": "No local handler and no ANet peer available.",
+        "message": "ANet daemon or peer is unavailable; AutoGen is not used as a fallback.",
     }
 
 
