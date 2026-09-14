@@ -147,15 +147,8 @@ cp .env.example .env
 - `OPENAI_API_KEY` + `OPENAI_BASE_URL` + `OPENAI_MODEL`
 - 或 `DEEPSEEK_API_KEY`（原生 DeepSeek 端点）
 
-推荐使用 OpenAI Next 的文本模型：
 
-```env
-OPENAI_API_KEY=你的 OpenAI Next Key
-OPENAI_BASE_URL=https://api.openai-next.com/v1
-OPENAI_MODEL=deepseek-v4-flash
-```
-
-视频生成（可选）：
+视频生成：
 
 - `HAPPYHORSE_API_KEY` / `KLING_API_KEY` / `OPENAI_NEXT_API_KEY` 等
 - 暂不配置视频模型时，保留这些变量为空即可；系统仍可完成剧本和分镜创作。
@@ -259,7 +252,7 @@ GEPA 注册表默认位于 `storage/gepa/registry.json`，可用 `GEPA_STORE_PAT
 
 ## 当前已实现
 
-- LangGraph 多导演讨论编排（替代 AutoGen）
+- LangGraph 多导演讨论编排
 - WebSocket 人机共创（随时插话 + 暂停 + 系统主动提问）
 - 个性化学习闭环（SQL 画像/ACE 经验 + Mem0 历史案例检索）
 - 可配置多提供商模型路由器（文本 + 视频）
@@ -268,7 +261,7 @@ GEPA 注册表默认位于 `storage/gepa/registry.json`，可用 `GEPA_STORE_PAT
 - 分镜预览（低成本文本 LLM）+ 确认后生成视频
 - Alembic 数据库迁移（SQLite → PostgreSQL 可选）
 - 前端 D3 网络舞台 + Agent 状态可视化
-- ANet 服务暴露与跨 Agent 调用（可选启用；不作为 AutoGen 的替代或回退）
+- ANet 服务暴露与跨 Agent 调用（可选启用）
 
 ---
 
@@ -285,13 +278,6 @@ GEPA 注册表默认位于 `storage/gepa/registry.json`，可用 `GEPA_STORE_PAT
 - [ ] PostgreSQL 生产部署
 
 ---
-
-## 适合谁
-
-- 想做"剧情重写 / 平行结局"产品的团队
-- 需要"多 Agent 协作 + 人机共创"示例的开发者
-- 研究 LangGraph Human-in-the-Loop 模式的工程师
-- 想把 AI 从"聊天框"升级到"共创系统"的创作者
 
 ---
 
